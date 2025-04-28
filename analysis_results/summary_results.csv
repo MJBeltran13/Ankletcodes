@@ -1,2 +1,2 @@
-num_jumps,max_vertical_speed,max_running_speed,avg_running_speed,jump_timestamps,filename
-0,76.69502078033779,251.00493959158487,188.72384649840464,[],ankle_jumps_running_sample.csv
+movement_type,num_movements,max_vertical_speed,filename,walking_speed_avg_kmh,walking_speed_max_kmh
+jumps,7,5.0,with_jump.csv,0,0
