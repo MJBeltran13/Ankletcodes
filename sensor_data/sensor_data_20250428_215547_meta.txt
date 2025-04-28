@@ -1,0 +1,7 @@
+Data Collection Summary:
+Filename: sensor_data\sensor_data_20250428_215547.csv
+Collection time: 2025-04-28 21:56:47
+Duration: 60.00 seconds
+Total samples: 1942
+Average sampling rate: 32.37 Hz
+Measured sampling rate from timestamps: 32.36 Hz

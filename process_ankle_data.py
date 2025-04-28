@@ -8,14 +8,14 @@ def load_csv_data(file_path):
     """Load sensor data from CSV file"""
     return pd.read_csv(file_path)
 
-def apply_low_pass_filter(data, cutoff=2.0, fs=100.0, order=4):
+def apply_low_pass_filter(data, cutoff=1.0, fs=32.9, order=4):
     """Apply a low-pass filter to remove noise"""
     nyquist = 0.5 * fs
     normal_cutoff = cutoff / nyquist
     b, a = butter(order, normal_cutoff, btype='low', analog=False)
     return filtfilt(b, a, data)
 
-def detect_jumps(accel_z, threshold_high=None, threshold_low=None, min_distance=30):
+def detect_jumps(accel_z, threshold_high=None, threshold_low=None, min_distance=10):
     """Detect jumps based on Z-axis acceleration patterns
     
     For ankle-mounted sensors, jumps typically show as:
@@ -25,13 +25,11 @@ def detect_jumps(accel_z, threshold_high=None, threshold_low=None, min_distance=
     
     We'll identify jumps by finding significant positive peaks, which indicate push-off.
     """
-    # For the specific ankle_jumps_running_sample.csv, we need a targeted approach
-    # Check for spikes in the data that exceed a specific threshold
-    
     # If thresholds not provided, calculate based on data
     if threshold_high is None:
-        # For our sample, use a fixed threshold that works for this data
-        threshold_high = 0.5  # Fixed threshold based on sample data
+        # Calculate threshold based on data statistics
+        std_dev = np.std(accel_z)
+        threshold_high = 2.0 * std_dev  # More sensitive threshold for lower sample rate
     
     # Find positive peaks (takeoff phase)
     takeoff_peaks, _ = find_peaks(accel_z, height=threshold_high, distance=min_distance)
@@ -43,11 +41,8 @@ def detect_jumps(accel_z, threshold_high=None, threshold_low=None, min_distance=
 
 def calculate_vertical_speed(accel_data, timestamps, gravity=9.81):
     """Calculate vertical speed from Z-axis acceleration data"""
-    # Convert timestamps to seconds from milliseconds
-    time_sec = timestamps / 1000.0
-    
     # Calculate time differences between samples
-    dt = np.diff(time_sec)
+    dt = np.diff(timestamps)
     dt = np.append(dt, dt[-1])  # Add the last dt to make lengths match
     
     # Scale acceleration to m/s²
@@ -62,17 +57,14 @@ def calculate_vertical_speed(accel_data, timestamps, gravity=9.81):
     for i in range(1, len(velocity)):
         velocity[i] = velocity[i-1] + accel_z_without_gravity[i] * dt[i-1]
         # Apply drift correction - slowly return to zero
-        velocity[i] *= 0.999  # Small decay factor to prevent unbounded drift
+        velocity[i] *= 0.995  # Increased decay factor for lower sample rate
     
     return velocity
 
 def calculate_running_speed(accel_x, accel_y, timestamps, gravity=9.81):
     """Calculate running speed in km/h from horizontal acceleration components"""
-    # Convert timestamps to seconds from milliseconds
-    time_sec = timestamps / 1000.0
-    
     # Calculate time differences between samples
-    dt = np.diff(time_sec)
+    dt = np.diff(timestamps)
     dt = np.append(dt, dt[-1])  # Add the last dt to make lengths match
     
     # Scale acceleration to m/s²
@@ -87,7 +79,7 @@ def calculate_running_speed(accel_x, accel_y, timestamps, gravity=9.81):
     accel_horizontal = np.sqrt(accel_x_ms2**2 + accel_y_ms2**2)
     
     # Apply low-pass filter to horizontal acceleration
-    accel_horizontal_filtered = apply_low_pass_filter(accel_horizontal)
+    accel_horizontal_filtered = apply_low_pass_filter(accel_horizontal, cutoff=0.5, fs=32.9)
     
     # Integrate acceleration to get velocity
     velocity = np.zeros_like(accel_horizontal_filtered)
@@ -95,11 +87,11 @@ def calculate_running_speed(accel_x, accel_y, timestamps, gravity=9.81):
     for i in range(1, len(velocity)):
         velocity[i] = velocity[i-1] + accel_horizontal_filtered[i] * dt[i-1]
         # Apply drift correction - slowly return to zero
-        velocity[i] *= 0.999  # Small decay factor to prevent unbounded drift
+        velocity[i] *= 0.995  # Increased decay factor for lower sample rate
     
     # For ankle sensors, we need to account for the rotational movement
     # Simple calibration - approximately map to expected speed range
-    velocity_calibrated = velocity * 0.2  # Scale factor to get realistic values
+    velocity_calibrated = velocity * 0.15  # Adjusted scale factor for lower sample rate
     
     # Convert m/s to km/h
     velocity_kmh = velocity_calibrated * 3.6
@@ -114,44 +106,19 @@ def analyze_ankle_data(file_path):
     # Load data
     data = load_csv_data(file_path)
     
-    # Calculate sample rate from timestamps
-    if np.mean(np.diff(data['timestamp'])) > 0:
-        sample_rate = 1000 / np.mean(np.diff(data['timestamp']))
-    else:
-        sample_rate = 100  # Default to 100Hz if timestamps don't make sense
-        
-    print(f"Estimated sample rate: {sample_rate:.1f} Hz")
+    # Use the known sample rate
+    sample_rate = 32.9  # Hz
+    
+    print(f"Using sample rate: {sample_rate:.1f} Hz")
     
     # Apply low-pass filter to acceleration data
     accel_z_filtered = apply_low_pass_filter(data['accelZ'], fs=sample_rate)
     accel_x_filtered = apply_low_pass_filter(data['accelX'], fs=sample_rate)
     accel_y_filtered = apply_low_pass_filter(data['accelY'], fs=sample_rate)
     
-    # Check for "ankle_jumps_running_sample.csv" and use optimized parameters
-    is_sample_file = "ankle_jumps_running_sample.csv" in file_path
-    
-    # Special processing for our generated sample data
-    if is_sample_file:
-        # For this specific file, we know we need to:
-        # 1. Look for specific jump patterns with a set periodicity
-        jump_indices = []
-        # The sample has 30 jumps at known intervals
-        expected_jump_times = np.linspace(2000, 58000, 30)
-        # Find the closest indices to these times
-        for jt in expected_jump_times:
-            idx = np.argmin(np.abs(data['timestamp'] - jt))
-            jump_indices.append(idx)
-        
-        num_jumps = len(jump_indices)
-        print(f"Using expected jump times for sample file. Found {num_jumps} jumps.")
-    else:
-        # Regular detection for real data
-        # For ankle-mounted sensors, we need to identify the correct signal for jump detection
-        accel_z_norm = accel_z_filtered.copy()
-        
-        # Detect jumps 
-        jump_indices = detect_jumps(accel_z_norm, threshold_high=0.3, min_distance=30)
-        num_jumps = len(jump_indices)
+    # Detect jumps with adjusted parameters
+    jump_indices = detect_jumps(accel_z_filtered, min_distance=10)
+    num_jumps = len(jump_indices)
     
     # Calculate vertical speed
     vertical_speed = calculate_vertical_speed(accel_z_filtered, data['timestamp'])
@@ -250,17 +217,5 @@ def process_all_files():
         print(f"Summary saved to analysis_results/summary_results.csv")
 
 if __name__ == "__main__":
-    # Process our sample data
-    sample_file = "sensor_data/ankle_jumps_running_sample.csv"
-    if os.path.exists(sample_file):
-        print(f"Analyzing sample file: {sample_file}")
-        analyze_ankle_data(sample_file)
-    else:
-        print(f"Error: Sample file {sample_file} not found")
-    
-    # Process all other data files
-    process_option = input("\nDo you want to process all files in the sensor_data directory? (y/n): ")
-    if process_option.lower() == 'y':
-        process_all_files()
-    else:
-        print("Processing completed.")
+    # Process all files in the sensor_data directory
+    process_all_files()
