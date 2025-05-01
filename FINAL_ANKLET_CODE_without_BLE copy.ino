@@ -41,13 +41,36 @@ enum DeviceState {
 };
 DeviceState currentState = STATE_WEIGHT_SETUP;
 
-const float STEP_THRESHOLD = 2.7;
-const float STRIDE_LENGTH = 0.7;
-const int STEP_DEBOUNCE_TIME = 300;      // Renamed to avoid conflict
-const float STEPPING_THRESHOLD = 4.9;
-const float RUNNING_THRESHOLD = 7.9;
-const float VELOCITY_DECAY = 0.95;
-const float ACCEL_BIAS = 0.01;
+// Movement detection thresholds
+const float STEP_THRESHOLD = 2.4;        // Minimum acceleration to detect a step (in m/s²)
+                                         // Increase if too sensitive, decrease if missing steps
+                                         // Typical walking: 2.0-3.0, Running: 3.0-4.0
+
+const float STRIDE_LENGTH = 0.7;         // Average stride length in meters
+                                         // Used to calculate speed and distance
+                                         // Adjust based on user's height/stride
+
+const int STEP_DEBOUNCE_TIME = 300;      // Minimum time between step detections (in ms)
+                                         // Prevents double-counting steps
+                                         // Increase if counting too many steps, decrease if missing steps
+
+const float STEPPING_THRESHOLD = 1.9;    // Acceleration threshold to distinguish walking (in m/s²)
+                                         // Below this: No significant movement
+                                         // Above this: Walking detected
+                                         // Adjust based on user's walking style
+
+const float RUNNING_THRESHOLD = 2.9;     // Acceleration threshold to distinguish running (in m/s²)
+                                         // Below this: Walking
+                                         // Above this: Running
+                                         // Adjust based on user's running style
+
+const float VELOCITY_DECAY = 0.98;       // Rate at which velocity decreases over time (0.0-1.0)
+                                         // Higher values = slower decay, more sensitive to movement
+                                         // Lower values = faster decay, more stable but less sensitive
+
+const float ACCEL_BIAS = 0.005;          // Small offset to correct accelerometer bias (in m/s²)
+                                        // Helps reduce drift in displacement calculations
+                                        // Adjust based on your specific accelerometer's characteristics
 
 unsigned long lastStepTime = 0;
 unsigned long measurementStartTime = 0;
