@@ -42,8 +42,8 @@ enum DeviceState {
 DeviceState currentState = STATE_WEIGHT_SETUP;
 
 // Movement detection thresholds
-const float STEP_THRESHOLD = 2.4;        // Minimum acceleration to detect a step (in m/s²)
-                                         // Increase if too sensitive, decrease if missing steps
+const float STEP_THRESHOLD = 2.2;        // Minimum acceleration to detect a step (in m/s²)
+                                         // Balanced threshold for step detection
                                          // Typical walking: 2.0-3.0, Running: 3.0-4.0
 
 const float STRIDE_LENGTH = 0.7;         // Average stride length in meters
@@ -51,26 +51,39 @@ const float STRIDE_LENGTH = 0.7;         // Average stride length in meters
                                          // Adjust based on user's height/stride
 
 const int STEP_DEBOUNCE_TIME = 300;      // Minimum time between step detections (in ms)
-                                         // Prevents double-counting steps
+                                         // Balanced time to prevent double-counting
                                          // Increase if counting too many steps, decrease if missing steps
 
-const float STEPPING_THRESHOLD = 1.9;    // Acceleration threshold to distinguish walking (in m/s²)
+const float STEPPING_THRESHOLD = 1.2;    // Acceleration threshold to distinguish walking (in m/s²)
+                                         // Balanced threshold for walking detection
                                          // Below this: No significant movement
                                          // Above this: Walking detected
-                                         // Adjust based on user's walking style
 
-const float RUNNING_THRESHOLD = 2.9;     // Acceleration threshold to distinguish running (in m/s²)
+const float RUNNING_THRESHOLD = 2.5;     // Acceleration threshold to distinguish running (in m/s²)
+                                         // Balanced threshold for running detection
                                          // Below this: Walking
                                          // Above this: Running
-                                         // Adjust based on user's running style
 
 const float VELOCITY_DECAY = 0.98;       // Rate at which velocity decreases over time (0.0-1.0)
                                          // Higher values = slower decay, more sensitive to movement
                                          // Lower values = faster decay, more stable but less sensitive
 
-const float ACCEL_BIAS = 0.005;          // Small offset to correct accelerometer bias (in m/s²)
+const float ACCEL_BIAS = 0.001;          // Small offset to correct accelerometer bias (in m/s²)
                                         // Helps reduce drift in displacement calculations
                                         // Adjust based on your specific accelerometer's characteristics
+
+// Constants for improved jumping detection
+const float VERTICAL_JUMP_THRESHOLD = 3.5;      // Minimum vertical acceleration to qualify as jumping
+                                                // Lowered to detect more jumps while avoiding false positives
+const float HORIZONTAL_LIMIT_FOR_JUMP = 1.2;    // Maximum horizontal acceleration during jumping
+                                                // Balanced limit to distinguish from walking
+const float DISPLACEMENT_DECAY_RATE = 0.96;     // Faster displacement reduction rate
+const float JUMPING_DISPLACEMENT_LIMIT = 6.0;   // Lower limit on displacement
+                                                // Helps detect jumps more easily
+const unsigned long JUMP_PATTERN_TIMEOUT = 1200; // Reset jump pattern after 1.2 seconds
+                                                // Gives enough time to detect jumps
+const unsigned long JUMP_RESET_INTERVAL = 2500;  // Reset accumulated displacement after 2.5 seconds
+                                                // Maintains jump state longer
 
 unsigned long lastStepTime = 0;
 unsigned long measurementStartTime = 0;
@@ -95,14 +108,10 @@ int userDurationMinutes = 1;
 bool hasJumpingPattern = false;
 float verticalAccelMax = 0;
 unsigned long jumpPatternDuration = 0;
-const unsigned long JUMP_PATTERN_TIMEOUT = 2000; // Reset jump pattern after 2 seconds of non-jumping
+unsigned long lastJumpDetectTime = 0;    // Add back this declaration
+unsigned long consecutiveJumpingTime = 0; // Add back this declaration
 
-// Constants for improved jumping detection
-const float VERTICAL_JUMP_THRESHOLD = 2.5;      // Minimum vertical acceleration to qualify as jumping
-const float HORIZONTAL_LIMIT_FOR_JUMP = 0.8;    // Maximum horizontal acceleration during jumping
-const float DISPLACEMENT_DECAY_RATE = 0.85;     // Faster displacement reduction rate
-const float JUMPING_DISPLACEMENT_LIMIT = 3.0;   // Hard limit on displacement when jumping detected
-const unsigned long JUMP_RESET_INTERVAL = 5000; // Reset accumulated displacement after this long jumping
+
 
 void setup() {
   Serial.begin(115200);
@@ -655,28 +664,28 @@ float calculateSpeed(int steps, unsigned long timeMs) {
 
 // Determine movement type with improved jump detection
 String determineMovementType() {
-  // Debug data
-  Serial.print("DISP: ");
-  Serial.print(totalDisplacement);
-  Serial.print(" Jump: ");
-  Serial.println(hasJumpingPattern ? "YES" : "NO");
-  
-  // Forced jumping - use both pattern detection and displacement limits
-  if (hasJumpingPattern || verticalAccelMax > VERTICAL_JUMP_THRESHOLD * 1.5) {
-    return "Jumping";
-  }
-  
-  // Force cap on displacement for jumping
-  if (totalDisplacement < JUMPING_DISPLACEMENT_LIMIT) {
-    return "Jumping";
-  }
-  
-  // Only if we're certain it's not jumping
-  if (totalDisplacement > RUNNING_THRESHOLD && !hasJumpingPattern) {
-    return "Running";
-  } 
-  
-  return "Walking";
+    // Debug data
+    Serial.print("DISP: ");
+    Serial.print(totalDisplacement);
+    Serial.print(" Jump: ");
+    Serial.println(hasJumpingPattern ? "YES" : "NO");
+    
+    // More sensitive jumping detection
+    if (hasJumpingPattern || verticalAccelMax > VERTICAL_JUMP_THRESHOLD * 1.1) {
+        return "Jumping";
+    }
+    
+    // Force running detection if displacement is above threshold
+    if (totalDisplacement > RUNNING_THRESHOLD) {
+        return "Running";
+    }
+    
+    // Detect walking if there's any movement
+    if (totalDisplacement > STEPPING_THRESHOLD) {
+        return "Walking";
+    }
+    
+    return "Walking";  // Default to walking if no other movement detected
 }
 
 // Improved updateDisplacement function
@@ -700,41 +709,32 @@ void updateDisplacement(float accelX, float accelY, float accelZ, unsigned long 
     float horizontalAccel = sqrt(filteredAccelX * filteredAccelX + filteredAccelY * filteredAccelY);
     float verticalAccel = abs(accelZ);
     
-    // Enhanced jump detection logic - look for vertical acceleration pattern
-    static unsigned long lastJumpDetectTime = 0;
-    static unsigned long consecutiveJumpingTime = 0;
-    
-    // Explicit jump pattern detection
+    // Simplified jumping detection logic - extremely sensitive
     bool currentlyJumping = false;
     
-    // Stronger jumping detection - clear signature of jumping is high vertical with low horizontal
-    if (verticalAccel > VERTICAL_JUMP_THRESHOLD && horizontalAccel < HORIZONTAL_LIMIT_FOR_JUMP) {
-      currentlyJumping = true;
-      lastJumpDetectTime = currentTime;
-      
-      // Start or continue tracking jump patterns
-      if (jumpPatternDuration == 0) {
-        jumpPatternDuration = currentTime;
-      }
-      
-      // Track consecutive jumping time for displacement management
-      if (consecutiveJumpingTime == 0) {
-        consecutiveJumpingTime = currentTime;
-      }
+    // Detect jumping if vertical acceleration is above threshold
+    if (verticalAccel > VERTICAL_JUMP_THRESHOLD) {
+        currentlyJumping = true;
+        lastJumpDetectTime = currentTime;
+        hasJumpingPattern = true;  // Immediately set jumping pattern
+        
+        // Start or continue tracking jump patterns
+        if (jumpPatternDuration == 0) {
+            jumpPatternDuration = currentTime;
+        }
+        
+        // Track consecutive jumping time
+        if (consecutiveJumpingTime == 0) {
+            consecutiveJumpingTime = currentTime;
+        }
     }
     
-    // Update jump pattern status based on timing
-    if (currentTime - lastJumpDetectTime < JUMP_PATTERN_TIMEOUT) {
-      // We're within the jump pattern timeout
-      if (currentTime - jumpPatternDuration > 500) { // After just 0.5 second of jumping pattern
-        hasJumpingPattern = true;
-      }
-    } else {
-      // More gradual reset of jump pattern detection
-      if (currentTime - lastJumpDetectTime > JUMP_PATTERN_TIMEOUT * 3) {
-        jumpPatternDuration = 0;
-        hasJumpingPattern = false;
-      }
+    // Reset jumping state more gradually
+    if (currentTime - lastJumpDetectTime > JUMP_PATTERN_TIMEOUT) {
+        if (currentTime - lastJumpDetectTime > JUMP_PATTERN_TIMEOUT * 3) {
+            jumpPatternDuration = 0;
+            hasJumpingPattern = false;
+        }
     }
     
     // Force velocity decay based on movement type
