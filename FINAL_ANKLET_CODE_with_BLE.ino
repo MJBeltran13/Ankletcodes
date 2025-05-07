@@ -297,7 +297,10 @@ void displayWeightSetup() {
   display.drawRect(10, 40, sliderWidth, 8, SSD1306_WHITE);
   display.fillRect(10, 40, sliderPos, 8, SSD1306_WHITE);
   
- 
+  // Min/Max indicators
+  display.setTextSize(1);
+  display.setCursor(10, 50);
+
   
   // Controls help
   display.drawLine(0, 52, display.width(), 52, SSD1306_WHITE);
@@ -305,7 +308,7 @@ void displayWeightSetup() {
   display.print("UP/DOWN");
   
   display.setCursor(90, 55);
-  display.print("MODE: Next");
+  display.print("SET");
   
   display.display();
 }
@@ -332,7 +335,7 @@ void displayDurationSetup() {
   display.setCursor(0, 45);
   display.println("UP/DOWN");
   display.setCursor(0, 55);
-  display.println("SET");
+  display.println("Set");
   
   display.display();
 }
@@ -456,7 +459,7 @@ void updateDisplacement(float accelX, float accelY, unsigned long currentTime) {
 }
 
 String determineMovementType() {
-  if (totalDisplacement < STEPPING_THRESHOLD) return "jumping";
+  if (totalDisplacement < STEPPING_THRESHOLD) return "Jumping";
   else if (totalDisplacement > RUNNING_THRESHOLD) return "Running";
   else return "Walking";
 }
@@ -486,8 +489,8 @@ void sendResults() {
   Serial.println("--- Final Results ---");
   Serial.println("Activity: " + type);
 
-  if (type == "jumping") {
-    Serial.println("Steps: " + String(stepCount));
+  if (type == "Jumping") {
+    Serial.println("Jumps: " + String(stepCount));
     Serial.println("Calories: " + String(calories, 2) + " kcal");
   } else if (type == "Running") {
     Serial.println("Speed: " + String(speed, 2) + " km/h");
@@ -516,7 +519,7 @@ void sendResults() {
   display.println("Activity: " + type);
 
   int yPos = 24;
-  if (type == "jumping") {
+  if (type == "Jumping") {
     display.setCursor(0, yPos); display.print("Steps: "); display.println(stepCount); yPos += 10;
     display.setCursor(0, yPos); display.print("Cal: "); display.print(calories, 1); display.println(" kcal");
   } else if (type == "Running") {
@@ -532,7 +535,7 @@ void sendResults() {
   
   // Footer
   display.setCursor(0, 54);
-  display.println("MODE: New Session");
+  display.println("Restart");
   
   display.display();
 }
