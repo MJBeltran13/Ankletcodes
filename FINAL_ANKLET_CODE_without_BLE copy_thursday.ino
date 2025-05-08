@@ -759,6 +759,44 @@ float calculateCalories(float MET, int weightKg, int durationMinutes) {
   return (MET * 3.5 * weightKg / 200.0) * effectiveDuration;
 }
 
+// Update calibration values with orientation detection
+void updateCalibration(float accelX, float accelY, float accelZ) {
+  if (currentState == STATE_CALIBRATION && !calibrationComplete) {
+    float gyroX, gyroY, gyroZ;
+    if (IMU.gyroscopeAvailable()) {
+      IMU.readGyroscope(gyroX, gyroY, gyroZ);
+      gyroSumX += gyroX;
+      gyroSumY += gyroY;
+      gyroSumZ += gyroZ;
+    }
+    
+    calibrationSumX += accelX;
+    calibrationSumY += accelY;
+    calibrationSumZ += accelZ;
+    calibrationCount++;
+    
+    if (calibrationCount >= CALIBRATION_SAMPLES) {
+      calibrationX = calibrationSumX / CALIBRATION_SAMPLES;
+      calibrationY = calibrationSumY / CALIBRATION_SAMPLES;
+      calibrationZ = calibrationSumZ / CALIBRATION_SAMPLES;
+      
+      gyroCalibX = gyroSumX / CALIBRATION_SAMPLES;
+      gyroCalibY = gyroSumY / CALIBRATION_SAMPLES;
+      gyroCalibZ = gyroSumZ / CALIBRATION_SAMPLES;
+      
+      // Determine device orientation
+      currentOrientation = determineOrientation(calibrationX, calibrationY, calibrationZ);
+      
+      calibrationComplete = true;
+      Serial.println("Calibration complete:");
+      Serial.print("Accel X: "); Serial.println(calibrationX);
+      Serial.print("Accel Y: "); Serial.println(calibrationY);
+      Serial.print("Accel Z: "); Serial.println(calibrationZ);
+    }
+    displayCalibration();
+  }
+}
+
 void sendResults() {
   currentState = STATE_RESULTS;
   
@@ -777,7 +815,7 @@ void sendResults() {
   } else if (type == "Jumping") {
     unsigned long elapsedTimeMinutes = (millis() - measurementStartTime) / 60000.0;
     if (elapsedTimeMinutes < 0.1) elapsedTimeMinutes = 0.1;
-    float jumpsPerMinute = stepCount / elapsedTimeMinutes;
+    float jumpsPerMinute = jumpCount / (float)elapsedTimeMinutes;
     
     if (jumpsPerMinute < 80) intensityLevel = "Light";
     else if (jumpsPerMinute < 100) intensityLevel = "Moderate";
@@ -798,9 +836,9 @@ void sendResults() {
   if (type == "Jumping") {
     unsigned long elapsedTimeMinutes = (millis() - measurementStartTime) / 60000.0;
     if (elapsedTimeMinutes < 0.1) elapsedTimeMinutes = 0.1;
-    float jumpsPerMinute = stepCount / elapsedTimeMinutes;
+    float jumpsPerMinute = jumpCount / (float)elapsedTimeMinutes;
     
-    Serial.println("Jumps: " + String(stepCount));
+    Serial.println("Jumps: " + String(jumpCount));
     Serial.println("Jumps/min: " + String(jumpsPerMinute, 1));
     Serial.println("Calories: " + String(calories, 2) + " kcal");
   } else {
@@ -834,6 +872,9 @@ void sendResults() {
     
     display.setCursor(0, 40);
     display.print("Rate: ");
+    unsigned long elapsedTimeMinutes = (millis() - measurementStartTime) / 60000.0;
+    if (elapsedTimeMinutes < 0.1) elapsedTimeMinutes = 0.1;
+    float jumpsPerMinute = jumpCount / (float)elapsedTimeMinutes;
     display.print(jumpsPerMinute, 1);
     display.print("/min");
   } else {
