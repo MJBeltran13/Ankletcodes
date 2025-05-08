@@ -43,48 +43,31 @@ enum DeviceState {
 DeviceState currentState = STATE_WEIGHT_SETUP;
 
 // Movement detection thresholds
-const float STEP_THRESHOLD = 2.2;        // Minimum acceleration to detect a step (in m/s²)
-                                         // Balanced threshold for step detection
-                                         // Typical walking: 2.0-3.0, Running: 3.0-4.0
+const float STEP_THRESHOLD = 2.0;        // Minimum acceleration to detect a step (in m/s²)
+                                        // Lowered for better walking detection
 
 const float STRIDE_LENGTH = 0.7;         // Average stride length in meters
-                                         // Used to calculate speed and distance
-                                         // Adjust based on user's height/stride
+                                        // Used to calculate speed and distance
 
-const int STEP_DEBOUNCE_TIME = 300;      // Minimum time between step detections (in ms)
-                                         // Balanced time to prevent double-counting
-                                         // Increase if counting too many steps, decrease if missing steps
+const int STEP_DEBOUNCE_TIME = 400;      // Increased debounce time for better step detection
 
-const float STEPPING_THRESHOLD = 1.2;    // Acceleration threshold to distinguish walking (in m/s²)
-                                         // Balanced threshold for walking detection
-                                         // Below this: No significant movement
-                                         // Above this: Walking detected
+const float STEPPING_THRESHOLD = 1.0;    // Lowered threshold for walking detection
 
-const float RUNNING_THRESHOLD = 2.5;     // Acceleration threshold to distinguish running (in m/s²)
-                                         // Balanced threshold for running detection
-                                         // Below this: Walking
-                                         // Above this: Running
+const float RUNNING_THRESHOLD = 3.0;     // Increased threshold for running detection
 
-const float VELOCITY_DECAY = 0.98;       // Rate at which velocity decreases over time (0.0-1.0)
-                                         // Higher values = slower decay, more sensitive to movement
-                                         // Lower values = faster decay, more stable but less sensitive
+const float VELOCITY_DECAY = 0.95;       // Adjusted for more stable readings
 
 const float ACCEL_BIAS = 0.001;          // Small offset to correct accelerometer bias (in m/s²)
                                         // Helps reduce drift in displacement calculations
                                         // Adjust based on your specific accelerometer's characteristics
 
 // Constants for improved jumping detection
-const float VERTICAL_JUMP_THRESHOLD = 3.5;      // Minimum vertical acceleration to qualify as jumping
-                                                // Lowered to detect more jumps while avoiding false positives
-const float HORIZONTAL_LIMIT_FOR_JUMP = 1.2;    // Maximum horizontal acceleration during jumping
-                                                // Balanced limit to distinguish from walking
-const float DISPLACEMENT_DECAY_RATE = 0.96;     // Faster displacement reduction rate
-const float JUMPING_DISPLACEMENT_LIMIT = 6.0;   // Lower limit on displacement
-                                                // Helps detect jumps more easily
-const unsigned long JUMP_PATTERN_TIMEOUT = 1200; // Reset jump pattern after 1.2 seconds
-                                                // Gives enough time to detect jumps
-const unsigned long JUMP_RESET_INTERVAL = 2500;  // Reset accumulated displacement after 2.5 seconds
-                                                // Maintains jump state longer
+const float VERTICAL_JUMP_THRESHOLD = 4.0;      // Increased threshold for jump detection
+const float HORIZONTAL_LIMIT_FOR_JUMP = 1.0;    // Lowered to better distinguish from walking
+const float DISPLACEMENT_DECAY_RATE = 0.94;     // Faster decay for more accurate readings
+const float JUMPING_DISPLACEMENT_LIMIT = 5.0;   // Adjusted limit for jump detection
+const unsigned long JUMP_PATTERN_TIMEOUT = 1000; // Shorter timeout for better pattern detection
+const unsigned long JUMP_RESET_INTERVAL = 2000;  // Shorter reset interval
 
 unsigned long lastStepTime = 0;
 unsigned long measurementStartTime = 0;
@@ -497,85 +480,110 @@ void displayCalibration() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   
-  // Header
-  display.fillRect(0, 0, display.width(), 14, SSD1306_WHITE);
+  // Header with icon
+  display.fillRect(0, 0, display.width(), 16, SSD1306_WHITE);
   display.setTextColor(SSD1306_BLACK);
   display.setTextSize(1);
-  display.setCursor(20, 3);
-  display.print("CALIBRATION");
+  display.setCursor(32, 4);
+  display.print("CALIBRATING");
+  
+  // Calibration icon in header
+  display.drawCircle(16, 8, 6, SSD1306_BLACK);
+  display.drawLine(16, 8, 16, 4, SSD1306_BLACK);
+  display.drawLine(16, 8, 19, 8, SSD1306_BLACK);
   
   display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(1);
   
   if (!calibrationComplete) {
-    // Instructions
-    display.setCursor(0, 16);
-    display.println("Hold device in your");
-    display.println("preferred position");
-    display.println("and keep still");
+    // Status message
+    display.setTextSize(1);
+    display.setCursor(4, 20);
+    display.print("Please hold still");
+    
+    // Progress circle animation
+    int centerX = 64;
+    int centerY = 38;
+    int radius = 12;
+    float progress = (float)calibrationCount / CALIBRATION_SAMPLES;
+    int endAngle = (int)(progress * 360);
+    
+    // Draw progress circle
+    for (int angle = 0; angle < endAngle; angle += 15) {
+      float radians = angle * PI / 180.0;
+      int x1 = centerX + (radius - 2) * cos(radians);
+      int y1 = centerY + (radius - 2) * sin(radians);
+      int x2 = centerX + (radius + 2) * cos(radians);
+      int y2 = centerY + (radius + 2) * sin(radians);
+      display.drawLine(x1, y1, x2, y2, SSD1306_WHITE);
+    }
+    
+    // Progress percentage in circle
+    display.setTextSize(1);
+    int progress_num = (calibrationCount * 100) / CALIBRATION_SAMPLES;
+    display.setCursor(centerX - (progress_num < 10 ? 3 : (progress_num < 100 ? 6 : 9)), centerY - 3);
+    display.print(progress_num);
+    display.print("%");
     
     // Progress bar
-    int progressWidth = map(calibrationCount, 0, CALIBRATION_SAMPLES, 0, display.width() - 20);
-    display.drawRect(10, 35, display.width() - 20, 8, SSD1306_WHITE);
-    display.fillRect(10, 35, progressWidth, 8, SSD1306_WHITE);
+    display.drawRect(14, 54, 100, 6, SSD1306_WHITE);
+    int progressWidth = map(calibrationCount, 0, CALIBRATION_SAMPLES, 0, 98);
+    display.fillRect(15, 55, progressWidth, 4, SSD1306_WHITE);
     
-    // Status
-    display.setCursor(0, 46);
-    display.print("Progress: ");
-    display.print((calibrationCount * 100) / CALIBRATION_SAMPLES);
-    display.print("%");
   } else {
-    // Show detected orientation with number
-    display.setCursor(0, 17);
-    display.print("Detected Orientation:");
+    // Show orientation with visual indicator
+    display.setTextSize(1);
+    display.setCursor(4, 20);
+    display.print("Position:");
     
-    // Highlight current orientation in the list
-    const int Y_START = 27;
-    const int LINE_HEIGHT = 8;
-    
-    String orientations[] = {
-      "1. Normal (Z up)",
-      "2. Upside down (Z down)",
-      "3. Horizontal X+",
-      "4. Horizontal X-",
-      "5. Vertical Y+",
-      "6. Vertical Y-",
-      "7. Tilted"
-    };
-    
-    int highlightIndex = 6; // Default to Tilted
+    String orientText;
+    int iconX = 64;
+    int iconY = 38;
     
     switch (currentOrientation) {
-      case ORIENTATION_NORMAL_Z_UP: highlightIndex = 0; break;
-      case ORIENTATION_UPSIDE_DOWN: highlightIndex = 1; break;
-      case ORIENTATION_HORIZONTAL_X_POS: highlightIndex = 2; break;
-      case ORIENTATION_HORIZONTAL_X_NEG: highlightIndex = 3; break;
-      case ORIENTATION_VERTICAL_Y_POS: highlightIndex = 4; break;
-      case ORIENTATION_VERTICAL_Y_NEG: highlightIndex = 5; break;
-      case ORIENTATION_TILTED: highlightIndex = 6; break;
+      case ORIENTATION_NORMAL_Z_UP:
+        orientText = "Normal";
+        // Up arrow
+        display.fillTriangle(iconX, iconY-8, iconX-6, iconY, iconX+6, iconY, SSD1306_WHITE);
+        break;
+      case ORIENTATION_UPSIDE_DOWN:
+        orientText = "Upside down";
+        // Down arrow
+        display.fillTriangle(iconX, iconY+8, iconX-6, iconY, iconX+6, iconY, SSD1306_WHITE);
+        break;
+      case ORIENTATION_HORIZONTAL_X_POS:
+        orientText = "Horizontal +";
+        // Right arrow
+        display.fillTriangle(iconX+8, iconY, iconX, iconY-6, iconX, iconY+6, SSD1306_WHITE);
+        break;
+      case ORIENTATION_HORIZONTAL_X_NEG:
+        orientText = "Horizontal -";
+        // Left arrow
+        display.fillTriangle(iconX-8, iconY, iconX, iconY-6, iconX, iconY+6, SSD1306_WHITE);
+        break;
+      case ORIENTATION_VERTICAL_Y_POS:
+      case ORIENTATION_VERTICAL_Y_NEG:
+        orientText = "Vertical";
+        // Double-ended arrow
+        display.drawLine(iconX, iconY-8, iconX, iconY+8, SSD1306_WHITE);
+        display.fillTriangle(iconX, iconY-8, iconX-4, iconY-4, iconX+4, iconY-4, SSD1306_WHITE);
+        display.fillTriangle(iconX, iconY+8, iconX-4, iconY+4, iconX+4, iconY+4, SSD1306_WHITE);
+        break;
+      default:
+        orientText = "Tilted";
+        // Circular arrow
+        display.drawCircle(iconX, iconY, 6, SSD1306_WHITE);
+        display.fillTriangle(iconX+6, iconY-2, iconX+6, iconY+2, iconX+9, iconY, SSD1306_WHITE);
+        break;
     }
     
-    // Draw all options with the current one highlighted
-    for (int i = 0; i < 7; i++) {
-      if (i == highlightIndex) {
-        // Highlight current orientation with inverted display
-        display.fillRect(0, Y_START + i * LINE_HEIGHT - 1, display.width(), LINE_HEIGHT, SSD1306_WHITE);
-        display.setTextColor(SSD1306_BLACK);
-        display.setCursor(5, Y_START + i * LINE_HEIGHT);
-      } else {
-        display.setTextColor(SSD1306_WHITE);
-        display.setCursor(5, Y_START + i * LINE_HEIGHT);
-      }
-      display.print(orientations[i]);
-    }
+    // Display orientation text
+    display.setTextSize(1);
+    display.setCursor(4, 32);
+    display.print(orientText);
     
-    // Reset text color
-    display.setTextColor(SSD1306_WHITE);
-  }
-  
-  // Instructions
-  if (calibrationComplete) {
-    display.setCursor(10, 56);
+    // Bottom instruction
+    display.drawRect(4, 54, 120, 9, SSD1306_WHITE);
+    display.setCursor(8, 55);
     display.print("Press MODE to continue");
   }
   
@@ -856,22 +864,21 @@ String determineMovementType() {
     Serial.print(" Jump: ");
     Serial.println(hasJumpingPattern ? "YES" : "NO");
     
-    // More sensitive jumping detection
-    if (hasJumpingPattern || verticalAccelMax > VERTICAL_JUMP_THRESHOLD * 1.1) {
+    // First check for jumping - it has priority
+    if (hasJumpingPattern && verticalAccelMax > VERTICAL_JUMP_THRESHOLD) {
         return "Jumping";
     }
     
-    // Force running detection if displacement is above threshold
-    if (totalDisplacement > RUNNING_THRESHOLD) {
+    // Calculate average speed for the last period
+    float currentSpeed = calculateSpeed(stepCount, millis() - measurementStartTime);
+    
+    // Running detection with stricter conditions
+    if (totalDisplacement > RUNNING_THRESHOLD && currentSpeed > 8.0) {
         return "Running";
     }
     
-    // Detect walking if there's any movement
-    if (totalDisplacement > STEPPING_THRESHOLD) {
-        return "Walking";
-    }
-    
-    return "Walking";  // Default to walking if no other movement detected
+    // Default to walking for all other movement
+    return "Walking";
 }
 
 // Modified updateDisplacement to handle different orientations
