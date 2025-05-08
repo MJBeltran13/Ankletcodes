@@ -35,6 +35,7 @@ const unsigned long REPEAT_TIME = 300;           // Subsequent repeat time
 enum DeviceState {
   STATE_WEIGHT_SETUP,
   STATE_DURATION_SETUP,
+  STATE_CALIBRATION,  // New state for calibration
   STATE_READY,
   STATE_TRACKING,
   STATE_RESULTS
@@ -111,7 +112,70 @@ unsigned long jumpPatternDuration = 0;
 unsigned long lastJumpDetectTime = 0;    // Add back this declaration
 unsigned long consecutiveJumpingTime = 0; // Add back this declaration
 
+// Calibration variables
+float calibrationX = 0, calibrationY = 0, calibrationZ = 0;
+float gyroCalibX = 0, gyroCalibY = 0, gyroCalibZ = 0;
+const int CALIBRATION_SAMPLES = 50;
+int calibrationCount = 0;
+float calibrationSumX = 0, calibrationSumY = 0, calibrationSumZ = 0;
+float gyroSumX = 0, gyroSumY = 0, gyroSumZ = 0;
+bool calibrationComplete = false;
 
+// Orientation tracking
+enum DeviceOrientation {
+  ORIENTATION_NORMAL_Z_UP,
+  ORIENTATION_UPSIDE_DOWN,
+  ORIENTATION_HORIZONTAL_X_POS,
+  ORIENTATION_HORIZONTAL_X_NEG,
+  ORIENTATION_VERTICAL_Y_POS,
+  ORIENTATION_VERTICAL_Y_NEG,
+  ORIENTATION_TILTED
+};
+DeviceOrientation currentOrientation = ORIENTATION_TILTED;
+float gravityVector[3] = {0, 0, 0}; // Stores primary gravity direction
+
+// Function to determine device orientation from calibration data
+DeviceOrientation determineOrientation(float accX, float accY, float accZ) {
+  // Find the axis with the strongest gravity component
+  float absX = abs(accX);
+  float absY = abs(accY);
+  float absZ = abs(accZ);
+  
+  const float GRAVITY_THRESHOLD = 0.8; // Minimum gravity component to determine orientation
+  
+  // Z-axis orientations
+  if (absZ > absX && absZ > absY && absZ > GRAVITY_THRESHOLD) {
+    gravityVector[0] = 0;
+    gravityVector[1] = 0;
+    gravityVector[2] = (accZ > 0) ? 1.0 : -1.0;
+    return (accZ > 0) ? ORIENTATION_NORMAL_Z_UP : ORIENTATION_UPSIDE_DOWN;
+  } 
+  // X-axis orientations
+  else if (absX > absY && absX > absZ && absX > GRAVITY_THRESHOLD) {
+    gravityVector[0] = (accX > 0) ? 1.0 : -1.0;
+    gravityVector[1] = 0;
+    gravityVector[2] = 0;
+    return (accX > 0) ? ORIENTATION_HORIZONTAL_X_POS : ORIENTATION_HORIZONTAL_X_NEG;
+  } 
+  // Y-axis orientations
+  else if (absY > absX && absY > absZ && absY > GRAVITY_THRESHOLD) {
+    gravityVector[0] = 0;
+    gravityVector[1] = (accY > 0) ? 1.0 : -1.0;
+    gravityVector[2] = 0;
+    return (accY > 0) ? ORIENTATION_VERTICAL_Y_POS : ORIENTATION_VERTICAL_Y_NEG;
+  }
+  
+  // If no clear orientation detected, it's tilted
+  // Calculate an approximate gravity vector for tilted orientation
+  float magnitude = sqrt(accX*accX + accY*accY + accZ*accZ);
+  if (magnitude > 0.1) {
+    gravityVector[0] = accX / magnitude;
+    gravityVector[1] = accY / magnitude;
+    gravityVector[2] = accZ / magnitude;
+  }
+  
+  return ORIENTATION_TILTED;
+}
 
 void setup() {
   Serial.begin(115200);
@@ -273,17 +337,30 @@ void handleModeButton() {
       break;
       
     case STATE_DURATION_SETUP:
-      currentState = STATE_READY;
-      displayStatus("Ready", "Press MODE to start");
+      currentState = STATE_CALIBRATION;  // Go to calibration instead of ready
+      calibrationCount = 0;  // Reset calibration
+      calibrationSumX = 0;
+      calibrationSumY = 0;
+      calibrationSumZ = 0;
+      gyroSumX = 0;
+      gyroSumY = 0;
+      gyroSumZ = 0;
+      calibrationComplete = false;
+      displayCalibration();
+      break;
+      
+    case STATE_CALIBRATION:
+      if (calibrationComplete) {
+        currentState = STATE_READY;
+        displayStatus("Ready", "Press MODE to start");
+      }
       break;
       
     case STATE_READY:
-      // Manual start
       startMeasurement();
       break;
       
     case STATE_TRACKING:
-      // Force end measurement
       sendResults();
       break;
       
@@ -413,6 +490,141 @@ void displayDurationSetup() {
   display.print("MODE");
   
   display.display();
+}
+
+// Display calibration screen with orientation info
+void displayCalibration() {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  
+  // Header
+  display.fillRect(0, 0, display.width(), 14, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setTextSize(1);
+  display.setCursor(20, 3);
+  display.print("CALIBRATION");
+  
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+  
+  if (!calibrationComplete) {
+    // Instructions
+    display.setCursor(0, 16);
+    display.println("Hold device in your");
+    display.println("preferred position");
+    display.println("and keep still");
+    
+    // Progress bar
+    int progressWidth = map(calibrationCount, 0, CALIBRATION_SAMPLES, 0, display.width() - 20);
+    display.drawRect(10, 35, display.width() - 20, 8, SSD1306_WHITE);
+    display.fillRect(10, 35, progressWidth, 8, SSD1306_WHITE);
+    
+    // Status
+    display.setCursor(0, 46);
+    display.print("Progress: ");
+    display.print((calibrationCount * 100) / CALIBRATION_SAMPLES);
+    display.print("%");
+  } else {
+    // Show detected orientation with number
+    display.setCursor(0, 17);
+    display.print("Detected Orientation:");
+    
+    // Highlight current orientation in the list
+    const int Y_START = 27;
+    const int LINE_HEIGHT = 8;
+    
+    String orientations[] = {
+      "1. Normal (Z up)",
+      "2. Upside down (Z down)",
+      "3. Horizontal X+",
+      "4. Horizontal X-",
+      "5. Vertical Y+",
+      "6. Vertical Y-",
+      "7. Tilted"
+    };
+    
+    int highlightIndex = 6; // Default to Tilted
+    
+    switch (currentOrientation) {
+      case ORIENTATION_NORMAL_Z_UP: highlightIndex = 0; break;
+      case ORIENTATION_UPSIDE_DOWN: highlightIndex = 1; break;
+      case ORIENTATION_HORIZONTAL_X_POS: highlightIndex = 2; break;
+      case ORIENTATION_HORIZONTAL_X_NEG: highlightIndex = 3; break;
+      case ORIENTATION_VERTICAL_Y_POS: highlightIndex = 4; break;
+      case ORIENTATION_VERTICAL_Y_NEG: highlightIndex = 5; break;
+      case ORIENTATION_TILTED: highlightIndex = 6; break;
+    }
+    
+    // Draw all options with the current one highlighted
+    for (int i = 0; i < 7; i++) {
+      if (i == highlightIndex) {
+        // Highlight current orientation with inverted display
+        display.fillRect(0, Y_START + i * LINE_HEIGHT - 1, display.width(), LINE_HEIGHT, SSD1306_WHITE);
+        display.setTextColor(SSD1306_BLACK);
+        display.setCursor(5, Y_START + i * LINE_HEIGHT);
+      } else {
+        display.setTextColor(SSD1306_WHITE);
+        display.setCursor(5, Y_START + i * LINE_HEIGHT);
+      }
+      display.print(orientations[i]);
+    }
+    
+    // Reset text color
+    display.setTextColor(SSD1306_WHITE);
+  }
+  
+  // Instructions
+  if (calibrationComplete) {
+    display.setCursor(10, 56);
+    display.print("Press MODE to continue");
+  }
+  
+  display.display();
+}
+
+// Update calibration values with orientation detection
+void updateCalibration(float accelX, float accelY, float accelZ) {
+  if (currentState == STATE_CALIBRATION && !calibrationComplete) {
+    float gyroX, gyroY, gyroZ;
+    if (IMU.gyroscopeAvailable()) {
+      IMU.readGyroscope(gyroX, gyroY, gyroZ);
+      gyroSumX += gyroX;
+      gyroSumY += gyroY;
+      gyroSumZ += gyroZ;
+    }
+    
+    calibrationSumX += accelX;
+    calibrationSumY += accelY;
+    calibrationSumZ += accelZ;
+    calibrationCount++;
+    
+    if (calibrationCount >= CALIBRATION_SAMPLES) {
+      calibrationX = calibrationSumX / CALIBRATION_SAMPLES;
+      calibrationY = calibrationSumY / CALIBRATION_SAMPLES;
+      calibrationZ = calibrationSumZ / CALIBRATION_SAMPLES;
+      
+      gyroCalibX = gyroSumX / CALIBRATION_SAMPLES;
+      gyroCalibY = gyroSumY / CALIBRATION_SAMPLES;
+      gyroCalibZ = gyroSumZ / CALIBRATION_SAMPLES;
+      
+      // Determine device orientation
+      currentOrientation = determineOrientation(calibrationX, calibrationY, calibrationZ);
+      
+      calibrationComplete = true;
+      Serial.println("Calibration complete:");
+      Serial.print("Accel X: "); Serial.println(calibrationX);
+      Serial.print("Accel Y: "); Serial.println(calibrationY);
+      Serial.print("Accel Z: "); Serial.println(calibrationZ);
+      Serial.print("Orientation: ");
+      Serial.println(currentOrientation == ORIENTATION_NORMAL_Z_UP ? "Normal Z Up" :
+                    currentOrientation == ORIENTATION_UPSIDE_DOWN ? "Upside Down" :
+                    currentOrientation == ORIENTATION_HORIZONTAL_X_POS ? "Horizontal X Pos" :
+                    currentOrientation == ORIENTATION_HORIZONTAL_X_NEG ? "Horizontal X Neg" :
+                    currentOrientation == ORIENTATION_VERTICAL_Y_POS ? "Vertical Y Pos" :
+                    currentOrientation == ORIENTATION_VERTICAL_Y_NEG ? "Vertical Y Neg" : "Tilted");
+    }
+    displayCalibration();
+  }
 }
 
 // Helper function to display status messages
@@ -570,38 +782,12 @@ void displayLiveData() {
   if (remainingSeconds < 10) display.print("0");
   display.print(remainingSeconds);
   
-  // Movement type with icon - adjusted positioning
-  String moveType = determineMovementType();
-  display.setCursor(16, 30);
-  display.print("Mode: ");
-  display.print(moveType);
-  
-  // Type-specific icon - moved to align with other icons
-  if (moveType == "Jumping") {
-    display.drawLine(8, 30, 8, 33, SSD1306_WHITE); // Body
-    display.drawLine(6, 35, 8, 33, SSD1306_WHITE);  // Legs spread
-    display.drawLine(10, 35, 8, 33, SSD1306_WHITE);
-    display.drawLine(5, 31, 8, 33, SSD1306_WHITE);  // Arms up
-    display.drawLine(11, 31, 8, 33, SSD1306_WHITE);
-  } else if (moveType == "Running") {
-    display.drawLine(5, 30, 8, 32, SSD1306_WHITE);  // Forward leg
-    display.drawLine(8, 32, 11, 30, SSD1306_WHITE); // Back leg
-    display.drawLine(8, 32, 8, 28, SSD1306_WHITE); // Body
-    display.drawLine(8, 28, 6, 29, SSD1306_WHITE);  // Arms
-    display.drawLine(8, 28, 10, 29, SSD1306_WHITE);
-  } else { // Walking
-    display.drawLine(6, 33, 8, 30, SSD1306_WHITE);  // Legs
-    display.drawLine(8, 30, 10, 33, SSD1306_WHITE);
-    display.drawLine(8, 30, 8, 27, SSD1306_WHITE); // Body
-    display.drawLine(6, 29, 8, 30, SSD1306_WHITE);  // Arms
-    display.drawLine(8, 30, 10, 29, SSD1306_WHITE);
-  }
-  
-  // Current statistics in box - adjusted to prevent clipping
-  display.drawRect(0, 40, display.width(), 12, SSD1306_WHITE);
-  display.setCursor(4, 42);
+  // Current statistics in box - adjusted to use more space
+  display.drawRect(0, 30, display.width(), 12, SSD1306_WHITE);
+  display.setCursor(4, 32);
   
   // Show appropriate stats based on movement type
+  String moveType = determineMovementType();
   if (moveType == "Jumping") {
     display.print("Calories: ");
     float calories = calculateCalories(calculateMET(moveType), userWeight, (int)(elapsedTime / 60000.0));
@@ -688,110 +874,109 @@ String determineMovementType() {
     return "Walking";  // Default to walking if no other movement detected
 }
 
-// Improved updateDisplacement function
+// Modified updateDisplacement to handle different orientations
 void updateDisplacement(float accelX, float accelY, float accelZ, unsigned long currentTime) {
+  // Remove gravity component based on orientation
+  float adjustedX = accelX - (calibrationX * gravityVector[0]);
+  float adjustedY = accelY - (calibrationY * gravityVector[1]);
+  float adjustedZ = accelZ - (calibrationZ * gravityVector[2]);
+  
   float dt = (currentTime - lastSampleTime) / 1000.0;
   if (lastSampleTime == 0) dt = 0;
   
   if (dt > 0 && dt < 0.1) {
-    // Only update if we have a reasonable time interval
+    // Track maximum acceleration based on orientation
+    float verticalComponent;
     
-    // Track maximum vertical acceleration for jump detection
-    if (abs(accelZ) > verticalAccelMax) {
-      verticalAccelMax = abs(accelZ);
+    switch (currentOrientation) {
+      case ORIENTATION_NORMAL_Z_UP:
+      case ORIENTATION_UPSIDE_DOWN:
+        verticalComponent = abs(adjustedZ);
+        break;
+      case ORIENTATION_HORIZONTAL_X_POS:
+      case ORIENTATION_HORIZONTAL_X_NEG:
+        verticalComponent = abs(adjustedX);
+        break;
+      case ORIENTATION_VERTICAL_Y_POS:
+      case ORIENTATION_VERTICAL_Y_NEG:
+        verticalComponent = abs(adjustedY);
+        break;
+      case ORIENTATION_TILTED:
+      default:
+        // For tilted orientation, use the magnitude of all components
+        verticalComponent = sqrt(adjustedX * adjustedX + adjustedY * adjustedY + adjustedZ * adjustedZ);
+        break;
     }
     
-    // Apply bias correction - different for each axis
-    float filteredAccelX = accelX - ACCEL_BIAS;
-    float filteredAccelY = accelY - ACCEL_BIAS;
-    
-    // Calculate horizontal and vertical components
-    float horizontalAccel = sqrt(filteredAccelX * filteredAccelX + filteredAccelY * filteredAccelY);
-    float verticalAccel = abs(accelZ);
-    
-    // Simplified jumping detection logic - extremely sensitive
-    bool currentlyJumping = false;
-    
-    // Detect jumping if vertical acceleration is above threshold
-    if (verticalAccel > VERTICAL_JUMP_THRESHOLD) {
-        currentlyJumping = true;
-        lastJumpDetectTime = currentTime;
-        hasJumpingPattern = true;  // Immediately set jumping pattern
-        
-        // Start or continue tracking jump patterns
-        if (jumpPatternDuration == 0) {
-            jumpPatternDuration = currentTime;
-        }
-        
-        // Track consecutive jumping time
-        if (consecutiveJumpingTime == 0) {
-            consecutiveJumpingTime = currentTime;
-        }
+    if (verticalComponent > verticalAccelMax) {
+      verticalAccelMax = verticalComponent;
     }
     
-    // Reset jumping state more gradually
-    if (currentTime - lastJumpDetectTime > JUMP_PATTERN_TIMEOUT) {
-        if (currentTime - lastJumpDetectTime > JUMP_PATTERN_TIMEOUT * 3) {
-            jumpPatternDuration = 0;
-            hasJumpingPattern = false;
-        }
+    // Calculate horizontal components based on orientation
+    float horizontalAccel;
+    
+    switch (currentOrientation) {
+      case ORIENTATION_NORMAL_Z_UP:
+      case ORIENTATION_UPSIDE_DOWN:
+        horizontalAccel = sqrt(adjustedX * adjustedX + adjustedY * adjustedY);
+        break;
+      case ORIENTATION_HORIZONTAL_X_POS:
+      case ORIENTATION_HORIZONTAL_X_NEG:
+        horizontalAccel = sqrt(adjustedY * adjustedY + adjustedZ * adjustedZ);
+        break;
+      case ORIENTATION_VERTICAL_Y_POS:
+      case ORIENTATION_VERTICAL_Y_NEG:
+        horizontalAccel = sqrt(adjustedX * adjustedX + adjustedZ * adjustedZ);
+        break;
+      case ORIENTATION_TILTED:
+      default:
+        // For tilted, use the planar component perpendicular to gravity vector
+        float gx = gravityVector[0], gy = gravityVector[1], gz = gravityVector[2];
+        float dot = adjustedX * gx + adjustedY * gy + adjustedZ * gz;
+        float projX = dot * gx;
+        float projY = dot * gy;
+        float projZ = dot * gz;
+        float perpX = adjustedX - projX;
+        float perpY = adjustedY - projY;
+        float perpZ = adjustedZ - projZ;
+        horizontalAccel = sqrt(perpX * perpX + perpY * perpY + perpZ * perpZ);
+        break;
     }
     
-    // Force velocity decay based on movement type
-    float currentDecay;
+    // Apply bias correction
+    horizontalAccel = max(0.0f, horizontalAccel - ACCEL_BIAS);
     
-    // Use much stronger decay when jumping is detected
-    if (currentlyJumping || hasJumpingPattern) {
-      currentDecay = VELOCITY_DECAY * 0.5; // Much stronger damping during jumps
-      
-      // Nearly eliminate horizontal acceleration during jumping
-      filteredAccelX *= 0.1;
-      filteredAccelY *= 0.1;
-      
-      // Check for extended jumping and reset displacement
-      if (currentTime - consecutiveJumpingTime > JUMP_RESET_INTERVAL) {
-        // After continuous jumping, force displacement reduction
-        displacementX *= DISPLACEMENT_DECAY_RATE;
-        displacementY *= DISPLACEMENT_DECAY_RATE;
-      }
-      
-      // Force displacement to stay under the jump displacement limit
-      if (totalDisplacement > JUMPING_DISPLACEMENT_LIMIT) {
-        float scaleFactor = JUMPING_DISPLACEMENT_LIMIT / totalDisplacement;
-        displacementX *= scaleFactor;
-        displacementY *= scaleFactor;
-      }
-    } else {
-      currentDecay = VELOCITY_DECAY; 
-      consecutiveJumpingTime = 0; // Reset consecutive jumping time
-    }
+    // Update velocity with orientation-adjusted acceleration
+    velocityX = (velocityX + horizontalAccel * dt) * VELOCITY_DECAY;
+    velocityY = 0; // We'll use single-axis velocity for simplicity
     
-    // Apply static thresholds to filter out noise
-    if (abs(filteredAccelX) < 0.2) filteredAccelX = 0;
-    if (abs(filteredAccelY) < 0.2) filteredAccelY = 0;
-    
-    // Update velocity with filtered acceleration
-    velocityX = (velocityX + filteredAccelX * dt) * currentDecay;
-    velocityY = (velocityY + filteredAccelY * dt) * currentDecay;
-    
-    // Apply stronger velocity thresholds to prevent drift
-    if (abs(velocityX) < 0.1) velocityX = 0;
-    if (abs(velocityY) < 0.1) velocityY = 0;
-    
-    // Update displacement only if we have significant velocity
-    if (abs(velocityX) > 0 || abs(velocityY) > 0) {
+    // Update displacement
+    if (abs(velocityX) > 0) {
       displacementX += velocityX * dt;
-      displacementY += velocityY * dt;
+      totalDisplacement = abs(displacementX); // Use absolute value for total displacement
     }
     
-    // Calculate total displacement
-    totalDisplacement = sqrt(displacementX * displacementX + displacementY * displacementY);
+    // Jumping detection based on orientation
+    bool currentlyJumping = false;
+    if (verticalComponent > VERTICAL_JUMP_THRESHOLD) {
+      currentlyJumping = true;
+      lastJumpDetectTime = currentTime;
+      hasJumpingPattern = true;
+      
+      if (jumpPatternDuration == 0) {
+        jumpPatternDuration = currentTime;
+      }
+      if (consecutiveJumpingTime == 0) {
+        consecutiveJumpingTime = currentTime;
+      }
+    }
     
-    // Periodically reset max vertical acceleration for continued monitoring
-    static unsigned long lastResetTime = 0;
-    if (currentTime - lastResetTime > 1000) { // Reset once per second
-      verticalAccelMax = 0;
-      lastResetTime = currentTime;
+    // Reset jumping state gradually
+    if (currentTime - lastJumpDetectTime > JUMP_PATTERN_TIMEOUT) {
+      if (currentTime - lastJumpDetectTime > JUMP_PATTERN_TIMEOUT * 3) {
+        jumpPatternDuration = 0;
+        hasJumpingPattern = false;
+      }
     }
   }
   
@@ -799,13 +984,67 @@ void updateDisplacement(float accelX, float accelY, float accelZ, unsigned long 
 }
 
 float calculateMET(String type) {
-  if (type == "Running") return 8.0;
-  if (type == "Walking") return 3.5;
-  return 2.3;
+  if (type == "Running") {
+    float speed = calculateSpeed(stepCount, userDurationMillis);
+    
+    // More accurate MET values based on running speed (kph)
+    if (speed < 6.4) return 6.5;
+    else if (speed < 6.9) return 6.5;
+    else if (speed < 8.0) return 7.8;
+    else if (speed < 8.8) return 8.5;
+    else if (speed < 9.6) return 9.0;
+    else if (speed < 10.8) return 9.3;
+    else if (speed < 11.2) return 10.5;
+    else if (speed < 12.0) return 11.0;
+    else if (speed < 12.8) return 11.8;
+    else if (speed < 13.8) return 12.0;
+    else if (speed < 14.5) return 12.5;
+    else if (speed < 15.0) return 13.0;
+    else if (speed < 16.0) return 14.8;
+    else if (speed < 17.7) return 14.8;
+    else if (speed < 19.3) return 16.8;
+    else if (speed < 21.0) return 18.5;
+    else if (speed < 22.5) return 19.8;
+    else return 23.0;
+  }
+  else if (type == "Jumping") {
+    // Calculate jumps per minute based on step count and elapsed time
+    unsigned long elapsedTimeMinutes = (millis() - measurementStartTime) / 60000.0;
+    if (elapsedTimeMinutes < 0.1) elapsedTimeMinutes = 0.1; // Prevent division by zero
+    float jumpsPerMinute = stepCount / elapsedTimeMinutes;
+    
+    // MET values based on jumps per minute for jumping activity
+    if (jumpsPerMinute < 80) return 8.3;
+    else if (jumpsPerMinute < 100) return 10.0;
+    else if (jumpsPerMinute < 120) return 11.8;
+    else return 12.3; // 120+ jumps per minute
+  }
+  
+  // Default walking MET
+  return 3.5;
 }
 
 float calculateCalories(float MET, int weightKg, int durationMinutes) {
-  return (MET * 3.5 * weightKg / 200.0) * durationMinutes;
+  // More accurate formula: MET * 3.5 * weightKg / 200.0 * durationMinutes
+  // This formula considers:
+  // - MET value (metabolic equivalent of task)
+  // - 3.5 ml/kg/min (oxygen consumption at rest)
+  // - User weight in kg
+  // - 200.0 conversion factor (1 liter O2 ~ 5 kcal)
+  // - Duration in minutes
+  
+  // Calculate effective duration (actual elapsed time, not just the set duration)
+  float effectiveDuration = durationMinutes;
+  if (measurementStarted) {
+    unsigned long elapsedMs = millis() - measurementStartTime;
+    effectiveDuration = elapsedMs / 60000.0;
+  }
+  
+  // Use the higher of the two durations to avoid underestimation
+  if (effectiveDuration < 0.1) effectiveDuration = 0.1; // Prevent division by zero
+  
+  // Apply the formula with the effective duration
+  return (MET * 3.5 * weightKg / 200.0) * effectiveDuration;
 }
 
 void sendResults() {
@@ -815,12 +1054,41 @@ void sendResults() {
   String type = determineMovementType();
   float MET = calculateMET(type);
   float calories = calculateCalories(MET, userWeight, userDurationMinutes);
+  
+  // Calculate intensity metrics
+  String intensityLevel = "";
+  if (type == "Running") {
+    if (speed < 8.0) intensityLevel = "Light";
+    else if (speed < 11.0) intensityLevel = "Moderate";
+    else if (speed < 14.0) intensityLevel = "Vigorous";
+    else intensityLevel = "High";
+  } else if (type == "Jumping") {
+    unsigned long elapsedTimeMinutes = (millis() - measurementStartTime) / 60000.0;
+    if (elapsedTimeMinutes < 0.1) elapsedTimeMinutes = 0.1;
+    float jumpsPerMinute = stepCount / elapsedTimeMinutes;
+    
+    if (jumpsPerMinute < 80) intensityLevel = "Light";
+    else if (jumpsPerMinute < 100) intensityLevel = "Moderate";
+    else if (jumpsPerMinute < 120) intensityLevel = "Vigorous";
+    else intensityLevel = "High";
+  } else {
+    if (speed < 4.0) intensityLevel = "Light";
+    else if (speed < 5.5) intensityLevel = "Moderate";
+    else intensityLevel = "Brisk";
+  }
 
   Serial.println("--- Final Results ---");
   Serial.println("Activity: " + type);
+  Serial.println("Intensity: " + intensityLevel);
+  Serial.println("MET Value: " + String(MET, 1));
 
   if (type == "Jumping") {
+    unsigned long elapsedTimeMinutes = (millis() - measurementStartTime) / 60000.0;
+    if (elapsedTimeMinutes < 0.1) elapsedTimeMinutes = 0.1;
+    float jumpsPerMinute = stepCount / elapsedTimeMinutes;
+    
     Serial.println("Jumps: " + String(stepCount));
+    Serial.println("Jumps/min: " + String(jumpsPerMinute, 1));
     Serial.println("Calories: " + String(calories, 2) + " kcal");
   } else if (type == "Running") {
     Serial.println("Speed: " + String(speed, 2) + " km/h");
@@ -830,7 +1098,6 @@ void sendResults() {
     Serial.println("Steps: " + String(stepCount));
     Serial.println("Speed: " + String(speed, 2) + " km/h");
     Serial.println("Displacement: " + String(totalDisplacement, 2) + " m");
-    Serial.println("Calories: " + String(calories, 2) + " kcal");
   }
   Serial.println("---------------------");
 
@@ -894,6 +1161,9 @@ void sendResults() {
   display.setCursor(20, 18);
   display.print("Activity: ");
   display.print(type);
+  display.print(" (");
+  display.print(intensityLevel);
+  display.print(")");
   
   // Activity icon - moved left slightly
   if (type == "Jumping") {
@@ -920,6 +1190,12 @@ void sendResults() {
   // Results with icons - increased spacing between items
   int yPos = 30;
   
+  // Add MET value display
+  display.setCursor(18, yPos-2);
+  display.print("MET: ");
+  display.print(MET, 1);
+  yPos += 8;
+  
   if (type == "Jumping") {
     // Jumps count
     display.drawCircle(10, yPos, 4, SSD1306_WHITE);
@@ -927,7 +1203,17 @@ void sendResults() {
     display.setCursor(18, yPos-2);
     display.print("Jumps: ");
     display.print(stepCount);
-    yPos += 12; // Increased spacing
+    yPos += 8;
+    
+    // Jumps per minute
+    unsigned long elapsedTimeMinutes = (millis() - measurementStartTime) / 60000.0;
+    if (elapsedTimeMinutes < 0.1) elapsedTimeMinutes = 0.1;
+    float jumpsPerMinute = stepCount / elapsedTimeMinutes;
+    display.setCursor(18, yPos-2);
+    display.print("Rate: ");
+    display.print(jumpsPerMinute, 1);
+    display.print("/min");
+    yPos += 8;
     
     // Calories
     display.drawRect(8, yPos-2, 5, 7, SSD1306_WHITE);
@@ -944,7 +1230,7 @@ void sendResults() {
     display.print("Speed: ");
     display.print(speed, 1);
     display.print(" km/h");
-    yPos += 12; // Increased spacing
+    yPos += 8;
     
     // Steps with footprint icon
     display.drawCircle(9, yPos-1, 2, SSD1306_WHITE);
@@ -952,7 +1238,7 @@ void sendResults() {
     display.setCursor(18, yPos-2);
     display.print("Steps: ");
     display.print(stepCount);
-    yPos += 12; // Increased spacing
+    yPos += 8;
     
     // Calories with fire icon
     display.drawLine(8, yPos, 10, yPos-4, SSD1306_WHITE);
@@ -962,14 +1248,14 @@ void sendResults() {
     display.print("Cal: ");
     display.print(calories, 1);
     display.print(" kcal");
-  } else {
+  } else { // Walking
     // Steps with footprint icon
     display.drawCircle(9, yPos-1, 2, SSD1306_WHITE);
     display.drawCircle(12, yPos+1, 2, SSD1306_WHITE);
     display.setCursor(18, yPos-2);
     display.print("Steps: ");
     display.print(stepCount);
-    yPos += 12; // Increased spacing
+    yPos += 8;
     
     // Speed with speedometer icon
     display.drawCircle(10, yPos, 4, SSD1306_WHITE);
@@ -978,7 +1264,7 @@ void sendResults() {
     display.print("Speed: ");
     display.print(speed, 1);
     display.print(" km/h");
-    yPos += 12; // Increased spacing
+    yPos += 8;
     
     // Distance with ruler icon
     display.drawLine(6, yPos, 14, yPos, SSD1306_WHITE);
@@ -987,11 +1273,8 @@ void sendResults() {
     display.setCursor(18, yPos-2);
     display.print("Dist: ");
     display.print(totalDisplacement, 1);
-    
-    // Skip calories if not enough room
+    display.print(" m");
   }
-  
-
   
   display.display();
 }
@@ -1006,6 +1289,12 @@ void loop() {
     IMU.readAcceleration(accelX, accelY, accelZ);
     float magnitude = sqrt(accelX * accelX + accelY * accelY + accelZ * accelZ);
     unsigned long currentTime = millis();
+
+    // Handle calibration if in calibration state
+    if (currentState == STATE_CALIBRATION) {
+      updateCalibration(accelX, accelY, accelZ);
+      return;  // Skip other processing during calibration
+    }
 
     // Auto-start detection (if in ready state)
     if (currentState == STATE_READY && !measurementStarted && magnitude > STEP_THRESHOLD) {
