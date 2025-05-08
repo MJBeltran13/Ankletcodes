@@ -402,22 +402,22 @@ void displayWeightSetup() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   
-  display.setTextSize(1);
-  display.setCursor(32, 0);
-  display.print("WEIGHT SETUP");
+  // Header
+  display.setTextSize(2);
+  display.setCursor(25, 5);
+  display.print("WEIGHT");
   
   // Weight value
-  display.setTextSize(2);
-  display.setCursor(40, 20);
+  display.setTextSize(3);
+  display.setCursor(35, 25);
   display.print(userWeight);
-  display.setTextSize(1);
-  display.print(" kg");
   
-  // Controls
-  display.setCursor(0, 55);
-  display.print("UP/DOWN: Change");
-  display.setCursor(70, 55);
-  display.print("MODE: Next");
+  // Unit and controls
+  display.setTextSize(1);
+  display.setCursor(100, 32);
+  display.print("kg");
+  display.setCursor(0, 56);
+  display.print("UP/DN:Change  MODE:Next");
   
   display.display();
 }
@@ -427,22 +427,22 @@ void displayDurationSetup() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   
-  display.setTextSize(1);
-  display.setCursor(24, 0);
-  display.print("DURATION SETUP");
+  // Header
+  display.setTextSize(2);
+  display.setCursor(15, 5);
+  display.print("DURATION");
   
   // Duration value
-  display.setTextSize(2);
-  display.setCursor(40, 20);
+  display.setTextSize(3);
+  display.setCursor(35, 25);
   display.print(userDurationMinutes);
-  display.setTextSize(1);
-  display.print(" min");
   
-  // Controls
-  display.setCursor(0, 55);
-  display.print("UP/DOWN: Change");
-  display.setCursor(70, 55);
-  display.print("MODE: Next");
+  // Unit and controls
+  display.setTextSize(1);
+  display.setCursor(100, 32);
+  display.print("m");
+  display.setCursor(0, 56);
+  display.print("UP/DN:Change  MODE:Next");
   
   display.display();
 }
@@ -452,30 +452,125 @@ void displayCalibration() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   
+  // Header
   display.setTextSize(1);
-  display.setCursor(32, 0);
+  display.setCursor(30, 5);
   display.print("CALIBRATING");
   
   if (!calibrationComplete) {
-    display.setCursor(4, 20);
-    display.print("Please hold still");
-    
-    // Simple progress bar
-    display.drawRect(14, 40, 100, 6, SSD1306_WHITE);
+    // Progress bar
+    display.drawRect(14, 30, 100, 8, SSD1306_WHITE);
     int progressWidth = map(calibrationCount, 0, CALIBRATION_SAMPLES, 0, 98);
-    display.fillRect(15, 41, progressWidth, 4, SSD1306_WHITE);
+    display.fillRect(15, 31, progressWidth, 6, SSD1306_WHITE);
     
-    // Progress percentage
-    display.setCursor(50, 30);
-    int progress_num = (calibrationCount * 100) / CALIBRATION_SAMPLES;
-    display.print(progress_num);
+    // Percentage
+    display.setCursor(50, 45);
+    int progress = (calibrationCount * 100) / CALIBRATION_SAMPLES;
+    display.print(progress);
     display.print("%");
   } else {
-    display.setCursor(4, 20);
-    display.print("Calibration complete");
-    display.setCursor(4, 35);
-    display.print("Press MODE to continue");
+    display.setCursor(20, 30);
+    display.print("READY - Press MODE");
   }
+  
+  display.display();
+}
+
+// Display live measurement data
+void displayLiveData() {
+  if (millis() - lastDisplayUpdateTime < DISPLAY_UPDATE_INTERVAL) return;
+  lastDisplayUpdateTime = millis();
+  
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  
+  // Time remaining
+  unsigned long elapsedTime = millis() - measurementStartTime;
+  unsigned long remainingTime = userDurationMillis > elapsedTime ? userDurationMillis - elapsedTime : 0;
+  int remainingSeconds = remainingTime / 1000;
+  int remainingMinutes = remainingSeconds / 60;
+  remainingSeconds %= 60;
+  
+  // Activity type (large)
+  display.setTextSize(2);
+  String type = determineMovementType();
+  int typeX = (128 - (type.length() * 12)) / 2;  // Center text (12 pixels per char at size 2)
+  display.setCursor(typeX, 2);
+  display.print(type);
+  
+  // Stats (medium size)
+  display.setTextSize(2);
+  
+  // Steps/Jumps (depending on activity)
+  if (type == "Jumping") {
+    display.setCursor(5, 25);
+    display.print(jumpCount);
+    display.setTextSize(1);
+    display.print(" JUMPS");
+  } else {
+    display.setCursor(5, 25);
+    display.print(stepCount);
+    display.setTextSize(1);
+    display.print(" STEPS");
+  }
+  
+  // Time remaining
+  display.setTextSize(2);
+  display.setCursor(25, 45);
+  if (remainingMinutes < 10) display.print("0");
+  display.print(remainingMinutes);
+  display.print(":");
+  if (remainingSeconds < 10) display.print("0");
+  display.print(remainingSeconds);
+  
+  display.display();
+}
+
+// Display results screen
+void displayResults(String type, String intensityLevel, float speed, float calories) {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  
+  // Activity type
+  display.setTextSize(2);
+  int typeX = (128 - (type.length() * 12)) / 2;
+  display.setCursor(typeX, 0);
+  display.print(type);
+  
+  // Stats
+  display.setTextSize(1);
+  
+  if (type == "Jumping") {
+    // Jumps
+    display.setCursor(5, 20);
+    display.print("Jumps: ");
+    display.print(jumpCount);
+    
+    // Jump rate
+    display.setCursor(5, 32);
+    unsigned long elapsedTimeMinutes = (millis() - measurementStartTime) / 60000.0;
+    if (elapsedTimeMinutes < 0.1) elapsedTimeMinutes = 0.1;
+    float jumpsPerMinute = jumpCount / (float)elapsedTimeMinutes;
+    display.print(jumpsPerMinute, 1);
+    display.print("/min");
+  } else {
+    // Steps
+    display.setCursor(5, 20);
+    display.print("Steps: ");
+    display.print(stepCount);
+    
+    // Speed
+    display.setCursor(5, 32);
+    display.print(speed, 1);
+    display.print(" km/h");
+  }
+  
+  // Intensity and calories
+  display.setCursor(5, 44);
+  display.print(intensityLevel);
+  display.setCursor(5, 56);
+  display.print(calories, 1);
+  display.print(" kcal");
   
   display.display();
 }
@@ -485,62 +580,17 @@ void displayStatus(String line1, String line2) {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   
+  // First line (larger)
+  display.setTextSize(2);
+  int x1 = (128 - (line1.length() * 12)) / 2;
+  display.setCursor(x1, 10);
+  display.print(line1);
+  
+  // Second line (smaller)
   display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println(line1);
-  
-  display.setCursor(0, 20);
-  display.println(line2);
-  
-  display.display();
-}
-
-// Display live measurement data
-void displayLiveData() {
-  if (millis() - lastDisplayUpdateTime < DISPLAY_UPDATE_INTERVAL) return;
-  
-  lastDisplayUpdateTime = millis();
-  
-  unsigned long elapsedTime = millis() - measurementStartTime;
-  unsigned long remainingTime = userDurationMillis > elapsedTime ? userDurationMillis - elapsedTime : 0;
-  int remainingSeconds = remainingTime / 1000;
-  int remainingMinutes = remainingSeconds / 60;
-  remainingSeconds %= 60;
-  
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-  
-  // Header
-  display.setTextSize(1);
-  display.setCursor(32, 0);
-  display.print("TRACKING");
-  
-  // Steps and Jumps
-  display.setCursor(0, 16);
-  display.print("Steps: ");
-  display.print(stepCount);
-  
-  display.setCursor(70, 16);
-  display.print("Jumps: ");
-  display.print(jumpCount);
-  
-  // Time remaining
-  display.setCursor(0, 32);
-  display.print("Time: ");
-  if (remainingMinutes < 10) display.print("0");
-  display.print(remainingMinutes);
-  display.print(":");
-  if (remainingSeconds < 10) display.print("0");
-  display.print(remainingSeconds);
-  
-  // Current activity type
-  display.setCursor(0, 48);
-  display.print(determineMovementType());
-  
-  // Simple progress bar
-  display.drawRect(0, 60, 128, 4, SSD1306_WHITE);
-  int progressWidth = map(elapsedTime, 0, userDurationMillis, 0, 126);
-  display.fillRect(1, 61, progressWidth, 2, SSD1306_WHITE);
+  int x2 = (128 - (line2.length() * 6)) / 2;
+  display.setCursor(x2, 40);
+  display.print(line2);
   
   display.display();
 }
@@ -886,112 +936,86 @@ void sendResults() {
   }
   Serial.println("---------------------");
 
-  // Display results screen
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-  
-  // Header
-  display.setTextSize(1);
-  display.setCursor(32, 0);
-  display.print("RESULTS");
-  
-  // Activity type and intensity
-  display.setCursor(0, 16);
-  display.print(type);
-  display.print(" (");
-  display.print(intensityLevel);
-  display.print(")");
-  
-  // Stats
-  if (type == "Jumping") {
-    display.setCursor(0, 28);
-    display.print("Jumps: ");
-    display.print(jumpCount);
-    
-    display.setCursor(0, 40);
-    display.print("Rate: ");
-    unsigned long elapsedTimeMinutes = (millis() - measurementStartTime) / 60000.0;
-    if (elapsedTimeMinutes < 0.1) elapsedTimeMinutes = 0.1;
-    float jumpsPerMinute = jumpCount / (float)elapsedTimeMinutes;
-    display.print(jumpsPerMinute, 1);
-    display.print("/min");
-  } else {
-    display.setCursor(0, 28);
-    display.print("Steps: ");
-    display.print(stepCount);
-    
-    display.setCursor(0, 40);
-    display.print("Speed: ");
-    display.print(speed, 1);
-    display.print(" km/h");
-  }
-  
-  // Calories
-  display.setCursor(0, 52);
-  display.print("Calories: ");
-  display.print(calories, 1);
-  
-  display.display();
+  // Display results using new minimal layout
+  displayResults(type, intensityLevel, speed, calories);
 }
 
 void loop() {
   // Handle BLE central device connections/disconnections
   BLEDevice central = BLE.central();
+  
   if (central) {
     Serial.print("Connected to central: ");
     Serial.println(central.address());
-  }
-
-  // Check for button inputs
-  checkButtons();
-  
-  // Handle sensor data
-  float accelX, accelY, accelZ;
-  if (IMU.accelerationAvailable()) {
-    IMU.readAcceleration(accelX, accelY, accelZ);
-    float magnitude = sqrt(accelX * accelX + accelY * accelY + accelZ * accelZ);
-    unsigned long currentTime = millis();
-
-    // Handle calibration if in calibration state
-    if (currentState == STATE_CALIBRATION) {
-      updateCalibration(accelX, accelY, accelZ);
-      return;  // Skip other processing during calibration
-    }
-
-    // Auto-start detection (if in ready state)
-    if (currentState == STATE_READY && !measurementStarted && magnitude > STEP_THRESHOLD) {
-      startMeasurement();
-    }
-
-    if (currentState == STATE_TRACKING && measurementStarted && !measurementComplete) {
-      // Pass all acceleration components to the improved function
-      updateDisplacement(accelX, accelY, accelZ, currentTime);
+    
+    while (central.connected()) {
+      // Check for button inputs
+      checkButtons();
       
-      // Update live display
-      displayLiveData();
-      
-      // Update BLE characteristics
-      stepCharacteristic.writeValue(stepCount);
-      jumpCharacteristic.writeValue(jumpCount);
-      
-      if (currentTime - measurementStartTime >= userDurationMillis) {
-        sendResults();
-      } else if (currentTime - lastStepTime >= STEP_DEBOUNCE_TIME) {
-        // Only detect steps if we're not in a jumping state
-        if (!isInJumpState) {
-          if (magnitude > STEP_THRESHOLD && !wasInStep) {
-            wasInStep = true;
-          } else if (magnitude < (STEP_THRESHOLD * 0.8) && wasInStep) {
-            wasInStep = false;
-            stepCount++;
-            lastStepTime = currentTime;
-            
-            // Update step characteristic when step is detected
-            stepCharacteristic.writeValue(stepCount);
+      // Handle sensor data
+      float accelX, accelY, accelZ;
+      if (IMU.accelerationAvailable()) {
+        IMU.readAcceleration(accelX, accelY, accelZ);
+        float magnitude = sqrt(accelX * accelX + accelY * accelY + accelZ * accelZ);
+        unsigned long currentTime = millis();
+
+        // Handle calibration if in calibration state
+        if (currentState == STATE_CALIBRATION) {
+          updateCalibration(accelX, accelY, accelZ);
+          continue;  // Skip other processing during calibration
+        }
+
+        // Auto-start detection (if in ready state)
+        if (currentState == STATE_READY && !measurementStarted && magnitude > STEP_THRESHOLD) {
+          startMeasurement();
+        }
+
+        if (currentState == STATE_TRACKING && measurementStarted && !measurementComplete) {
+          // Pass all acceleration components to the improved function
+          updateDisplacement(accelX, accelY, accelZ, currentTime);
+          
+          // Update live display
+          displayLiveData();
+          
+          // Update BLE characteristics with notifications
+          if (stepCharacteristic.written()) {
+            Serial.print("Steps sent via BLE: ");
+            Serial.println(stepCount);
+          }
+          stepCharacteristic.writeValue(stepCount);
+          
+          if (jumpCharacteristic.written()) {
+            Serial.print("Jumps sent via BLE: ");
+            Serial.println(jumpCount);
+          }
+          jumpCharacteristic.writeValue(jumpCount);
+          
+          if (currentTime - measurementStartTime >= userDurationMillis) {
+            sendResults();
+          } else if (currentTime - lastStepTime >= STEP_DEBOUNCE_TIME) {
+            // Only detect steps if we're not in a jumping state
+            if (!isInJumpState) {
+              if (magnitude > STEP_THRESHOLD && !wasInStep) {
+                wasInStep = true;
+              } else if (magnitude < (STEP_THRESHOLD * 0.8) && wasInStep) {
+                wasInStep = false;
+                stepCount++;
+                lastStepTime = currentTime;
+                
+                // Update step characteristic when step is detected
+                stepCharacteristic.writeValue(stepCount);
+                Serial.print("Step detected and sent via BLE: ");
+                Serial.println(stepCount);
+              }
+            }
           }
         }
       }
+      
+      delay(10);
     }
+    
+    Serial.println("Disconnected from central device");
   }
   
   // Poll BLE events
