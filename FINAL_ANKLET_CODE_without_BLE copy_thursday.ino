@@ -2,14 +2,25 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include <Arduino_FreeRTOS.h>
-#include <semphr.h>
-#include <queue.h>
+#include <mbed.h>
+#include <rtos.h>
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_RESET -1
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// RTOS objects
+rtos::Thread thread_buttons;
+rtos::Thread thread_sensors;
+rtos::Thread thread_display;
+rtos::Mutex displayMutex;
+rtos::Mutex sensorDataMutex;
+
+// Thread timing constants
+const uint32_t BUTTONS_THREAD_DELAY = 50; // Check buttons every 50ms
+const uint32_t SENSORS_THREAD_DELAY = 10; // Process sensors every 10ms
+const uint32_t DISPLAY_THREAD_DELAY = 100; // Update display every 100ms
 
 // Button pins
 #define BUTTON_UP 2     // Increase values / Select
@@ -131,23 +142,10 @@ float maxJumpForce = 0;
 // Add jump counter variable at the top with other counters
 int jumpCount = 0;
 
-// RTOS task handles
-TaskHandle_t taskDisplayHandle;
-TaskHandle_t taskSensorHandle;
-TaskHandle_t taskButtonHandle;
-
-// RTOS mutexes/semaphores
-SemaphoreHandle_t displayMutex;
-SemaphoreHandle_t dataMutex;
-
-// RTOS queue for button events
-QueueHandle_t buttonEventQueue;
-
-// Button event structure
-struct ButtonEvent {
-  uint8_t button;
-  bool pressed;
-};
+// Thread function declarations
+void buttonsThreadFunc();
+void sensorsThreadFunc();
+void displayThreadFunc();
 
 // Function to determine device orientation from calibration data
 DeviceOrientation determineOrientation(float accX, float accY, float accZ) {
@@ -214,263 +212,188 @@ void setup() {
     while (1);
   }
   
-  // Create RTOS synchronization primitives
-  displayMutex = xSemaphoreCreateMutex();
-  dataMutex = xSemaphoreCreateMutex();
-  buttonEventQueue = xQueueCreate(10, sizeof(ButtonEvent));
-  
-  // Create RTOS tasks
-  xTaskCreate(
-    TaskDisplay,          // Task function
-    "DisplayTask",        // Name for debugging
-    1024,                 // Stack size (bytes)
-    NULL,                 // Parameter to pass
-    2,                    // Priority (higher number = higher priority)
-    &taskDisplayHandle    // Task handle
-  );
-  
-  xTaskCreate(
-    TaskSensor,           // Task function
-    "SensorTask",         // Name for debugging
-    1024,                 // Stack size (bytes)
-    NULL,                 // Parameter to pass
-    3,                    // Priority - highest for time-sensitive readings
-    &taskSensorHandle     // Task handle
-  );
-  
-  xTaskCreate(
-    TaskButton,           // Task function
-    "ButtonTask",         // Name for debugging
-    512,                  // Stack size (bytes)
-    NULL,                 // Parameter to pass
-    1,                    // Priority
-    &taskButtonHandle     // Task handle
-  );
-  
   // Start with weight setup
-  Serial.println("Anklet Ready");
+  displayWeightSetup();
   
-  // Start the scheduler
-  vTaskStartScheduler();
+  // Start RTOS threads
+  thread_buttons.start(buttonsThreadFunc);
+  thread_sensors.start(sensorsThreadFunc);
+  thread_display.start(displayThreadFunc);
   
-  // Scheduler should never reach here
-  Serial.println("Scheduler Failed!");
-  while(1);
+  Serial.println("Anklet Ready with RTOS");
 }
 
-// Display task - handles all display updates
-void TaskDisplay(void *pvParameters) {
-  (void) pvParameters;
+// Proper button debouncing and handling
+void checkButtons() {
+  unsigned long currentMillis = millis();
   
-  // Initial display
-  if (xSemaphoreTake(displayMutex, portMAX_DELAY) == pdTRUE) {
-    displayWeightSetup();
-    xSemaphoreGive(displayMutex);
+  // Read current button states
+  bool readingUp = digitalRead(BUTTON_UP);
+  bool readingDown = digitalRead(BUTTON_DOWN);
+  bool readingMode = digitalRead(BUTTON_MODE);
+  
+  // Store current debounced button states before updating
+  lastButtonUp = currentButtonUp;
+  lastButtonDown = currentButtonDown; 
+  lastButtonMode = currentButtonMode;
+  
+  // UP button debouncing
+  if (readingUp != rawButtonUp) {
+    lastButtonUpTime = currentMillis;
+    rawButtonUp = readingUp;
   }
   
-  TickType_t xLastWakeTime = xTaskGetTickCount();
+  if ((currentMillis - lastButtonUpTime) > BUTTON_DEBOUNCE_TIME) {
+    currentButtonUp = rawButtonUp;
+  }
   
-  for (;;) {
-    if (xSemaphoreTake(displayMutex, portMAX_DELAY) == pdTRUE) {
-      switch (currentState) {
-        case STATE_WEIGHT_SETUP:
-          displayWeightSetup();
-          break;
-          
-        case STATE_DURATION_SETUP:
-          displayDurationSetup();
-          break;
-          
-        case STATE_CALIBRATION:
-          displayCalibration();
-          break;
-          
-        case STATE_READY:
-          displayStatus("Ready", "Press MODE to start");
-          break;
-          
-        case STATE_TRACKING:
-          displayLiveData();
-          break;
-          
-        case STATE_RESULTS:
-          // Results are displayed once in sendResults()
-          break;
-      }
-      xSemaphoreGive(displayMutex);
+  // DOWN button debouncing
+  if (readingDown != rawButtonDown) {
+    lastButtonDownTime = currentMillis;
+    rawButtonDown = readingDown;
+  }
+  
+  if ((currentMillis - lastButtonDownTime) > BUTTON_DEBOUNCE_TIME) {
+    currentButtonDown = rawButtonDown;
+  }
+  
+  // MODE button debouncing  
+  if (readingMode != rawButtonMode) {
+    lastButtonModeTime = currentMillis;
+    rawButtonMode = readingMode;
+  }
+  
+  if ((currentMillis - lastButtonModeTime) > BUTTON_DEBOUNCE_TIME) {
+    currentButtonMode = rawButtonMode;
+  }
+  
+  // Button press detection and handling (transition from HIGH to LOW)
+  
+  // UP button - Handle initial press and repeats
+  if (currentButtonUp == LOW) {
+    if (lastButtonUp == HIGH || 
+        (currentMillis - lastButtonUpTime > REPEAT_FIRST_TIME && 
+         currentMillis - lastButtonActionTime > REPEAT_TIME)) {
+      // Either initial press or repeat time has elapsed
+      handleUpButton();
+      lastButtonActionTime = currentMillis;
     }
-    
-    // Update display at appropriate intervals
-    if (currentState == STATE_TRACKING) {
-      vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(DISPLAY_UPDATE_INTERVAL));
-    } else {
-      vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(100)); // Other states update less frequently
+  }
+  
+  // DOWN button - Handle initial press and repeats
+  if (currentButtonDown == LOW) {
+    if (lastButtonDown == HIGH || 
+        (currentMillis - lastButtonDownTime > REPEAT_FIRST_TIME && 
+         currentMillis - lastButtonActionTime > REPEAT_TIME)) {
+      // Either initial press or repeat time has elapsed
+      handleDownButton();
+      lastButtonActionTime = currentMillis;
     }
+  }
+  
+  // MODE button - Only trigger on new press, no repeats
+  if (currentButtonMode == LOW && lastButtonMode == HIGH) {
+    handleModeButton();
   }
 }
 
-// Sensor task - handles IMU data and activity calculations
-void TaskSensor(void *pvParameters) {
-  (void) pvParameters;
+// Handle UP button press based on current state
+void handleUpButton() {
+  Serial.println("UP button pressed");  // Debug output
   
-  for (;;) {
-    float accelX, accelY, accelZ;
-    unsigned long currentTime = millis();
-    
-    if (IMU.accelerationAvailable()) {
-      IMU.readAcceleration(accelX, accelY, accelZ);
-      float magnitude = sqrt(accelX * accelX + accelY * accelY + accelZ * accelZ);
+  switch (currentState) {
+    case STATE_WEIGHT_SETUP:
+      userWeight += 1;
+      if (userWeight > 150) userWeight = 150; // Maximum weight
+      displayWeightSetup();
+      break;
       
-      if (xSemaphoreTake(dataMutex, portMAX_DELAY) == pdTRUE) {
-        // Handle calibration if in calibration state
-        if (currentState == STATE_CALIBRATION) {
-          updateCalibration(accelX, accelY, accelZ);
-        }
-        
-        // Auto-start detection (if in ready state)
-        if (currentState == STATE_READY && !measurementStarted && magnitude > STEP_THRESHOLD) {
-          startMeasurement();
-        }
-        
-        if (currentState == STATE_TRACKING && measurementStarted && !measurementComplete) {
-          // Pass all acceleration components to the improved function
-          updateDisplacement(accelX, accelY, accelZ, currentTime);
-          
-          if (currentTime - measurementStartTime >= userDurationMillis) {
-            sendResults();
-          } else if (currentTime - lastStepTime >= STEP_DEBOUNCE_TIME) {
-            // Only detect steps if we're not in a jumping state
-            if (!isInJumpState) {
-              if (magnitude > STEP_THRESHOLD && !wasInStep) {
-                wasInStep = true;
-              } else if (magnitude < (STEP_THRESHOLD * 0.8) && wasInStep) {
-                wasInStep = false;
-                stepCount++;
-                lastStepTime = currentTime;
-              }
-            }
-          }
-        }
-        
-        xSemaphoreGive(dataMutex);
-      }
-    }
-    
-    // Sample IMU at appropriate rate
-    vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz sampling
+    case STATE_DURATION_SETUP:
+      userDurationMinutes += 1;
+      if (userDurationMinutes > 60) userDurationMinutes = 60; // Maximum duration
+      userDurationMillis = userDurationMinutes * 60000UL;
+      displayDurationSetup();
+      break;
+      
+    case STATE_RESULTS:
+      // Reset and go back to ready state
+      resetMeasurement();
+      currentState = STATE_READY;
+      displayStatus("Ready", "Press MODE to start");
+      break;
   }
 }
 
-// Button task - handles button input and debouncing
-void TaskButton(void *pvParameters) {
-  (void) pvParameters;
+// Handle DOWN button press based on current state
+void handleDownButton() {
+  Serial.println("DOWN button pressed");  // Debug output
   
-  TickType_t lastButtonUpTime = 0;
-  TickType_t lastButtonDownTime = 0;
-  TickType_t lastButtonModeTime = 0;
-  TickType_t lastButtonActionTime = 0;
+  switch (currentState) {
+    case STATE_WEIGHT_SETUP:
+      userWeight -= 5;
+      if (userWeight < 30) userWeight = 30; // Minimum weight
+      displayWeightSetup();
+      break;
+      
+    case STATE_DURATION_SETUP:
+      userDurationMinutes -= 1;
+      if (userDurationMinutes < 1) userDurationMinutes = 1; // Minimum duration
+      userDurationMillis = userDurationMinutes * 60000UL;
+      displayDurationSetup();
+      break;
+  }
+}
+
+// Handle MODE button press based on current state
+void handleModeButton() {
+  Serial.println("MODE button pressed");  // Debug output
   
-  bool buttonUpState = HIGH;
-  bool buttonDownState = HIGH;
-  bool buttonModeState = HIGH;
-  bool lastButtonUpState = HIGH;
-  bool lastButtonDownState = HIGH;
-  bool lastButtonModeState = HIGH;
-  
-  for (;;) {
-    TickType_t currentTicks = xTaskGetTickCount();
-    
-    // Read button states
-    bool readingUp = digitalRead(BUTTON_UP);
-    bool readingDown = digitalRead(BUTTON_DOWN);
-    bool readingMode = digitalRead(BUTTON_MODE);
-    
-    // UP button debouncing
-    if (readingUp != buttonUpState) {
-      lastButtonUpTime = currentTicks;
-      buttonUpState = readingUp;
-    }
-    
-    if ((currentTicks - lastButtonUpTime) > pdMS_TO_TICKS(BUTTON_DEBOUNCE_TIME)) {
-      if (buttonUpState != lastButtonUpState) {
-        if (buttonUpState == LOW) {
-          // Button pressed - handle it
-          if (xSemaphoreTake(dataMutex, portMAX_DELAY) == pdTRUE) {
-            handleUpButton();
-            xSemaphoreGive(dataMutex);
-          }
-          lastButtonActionTime = currentTicks;
-        }
-        lastButtonUpState = buttonUpState;
-      } else if (buttonUpState == LOW) {
-        // Handle repeats
-        if ((currentTicks - lastButtonUpTime > pdMS_TO_TICKS(REPEAT_FIRST_TIME)) && 
-            (currentTicks - lastButtonActionTime > pdMS_TO_TICKS(REPEAT_TIME))) {
-          if (xSemaphoreTake(dataMutex, portMAX_DELAY) == pdTRUE) {
-            handleUpButton();
-            xSemaphoreGive(dataMutex);
-          }
-          lastButtonActionTime = currentTicks;
-        }
+  switch (currentState) {
+    case STATE_WEIGHT_SETUP:
+      currentState = STATE_DURATION_SETUP;
+      displayDurationSetup();
+      break;
+      
+    case STATE_DURATION_SETUP:
+      currentState = STATE_CALIBRATION;  // Go to calibration instead of ready
+      calibrationCount = 0;  // Reset calibration
+      calibrationSumX = 0;
+      calibrationSumY = 0;
+      calibrationSumZ = 0;
+      gyroSumX = 0;
+      gyroSumY = 0;
+      gyroSumZ = 0;
+      calibrationComplete = false;
+      displayCalibration();
+      break;
+      
+    case STATE_CALIBRATION:
+      if (calibrationComplete) {
+        currentState = STATE_READY;
+        displayStatus("Ready", "Press MODE to start");
       }
-    }
-    
-    // DOWN button debouncing (similar logic as UP)
-    if (readingDown != buttonDownState) {
-      lastButtonDownTime = currentTicks;
-      buttonDownState = readingDown;
-    }
-    
-    if ((currentTicks - lastButtonDownTime) > pdMS_TO_TICKS(BUTTON_DEBOUNCE_TIME)) {
-      if (buttonDownState != lastButtonDownState) {
-        if (buttonDownState == LOW) {
-          // Button pressed - handle it
-          if (xSemaphoreTake(dataMutex, portMAX_DELAY) == pdTRUE) {
-            handleDownButton();
-            xSemaphoreGive(dataMutex);
-          }
-          lastButtonActionTime = currentTicks;
-        }
-        lastButtonDownState = buttonDownState;
-      } else if (buttonDownState == LOW) {
-        // Handle repeats
-        if ((currentTicks - lastButtonDownTime > pdMS_TO_TICKS(REPEAT_FIRST_TIME)) && 
-            (currentTicks - lastButtonActionTime > pdMS_TO_TICKS(REPEAT_TIME))) {
-          if (xSemaphoreTake(dataMutex, portMAX_DELAY) == pdTRUE) {
-            handleDownButton();
-            xSemaphoreGive(dataMutex);
-          }
-          lastButtonActionTime = currentTicks;
-        }
-      }
-    }
-    
-    // MODE button debouncing (no repeats)
-    if (readingMode != buttonModeState) {
-      lastButtonModeTime = currentTicks;
-      buttonModeState = readingMode;
-    }
-    
-    if ((currentTicks - lastButtonModeTime) > pdMS_TO_TICKS(BUTTON_DEBOUNCE_TIME)) {
-      if (buttonModeState != lastButtonModeState) {
-        if (buttonModeState == LOW) {
-          // Button pressed - handle it
-          if (xSemaphoreTake(dataMutex, portMAX_DELAY) == pdTRUE) {
-            handleModeButton();
-            xSemaphoreGive(dataMutex);
-          }
-        }
-        lastButtonModeState = buttonModeState;
-      }
-    }
-    
-    // Give other tasks a chance to run
-    vTaskDelay(pdMS_TO_TICKS(20)); // 50Hz polling rate for buttons
+      break;
+      
+    case STATE_READY:
+      startMeasurement();
+      break;
+      
+    case STATE_TRACKING:
+      sendResults();
+      break;
+      
+    case STATE_RESULTS:
+      resetMeasurement();
+      currentState = STATE_READY;
+      displayStatus("Ready", "Press MODE to start");
+      break;
   }
 }
 
 // Display weight setup screen
 void displayWeightSetup() {
+  displayMutex.lock();
+  
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   
@@ -492,10 +415,14 @@ void displayWeightSetup() {
   display.print("MODE: Next");
   
   display.display();
+  
+  displayMutex.unlock();
 }
 
 // Display duration setup screen
 void displayDurationSetup() {
+  displayMutex.lock();
+  
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   
@@ -517,10 +444,14 @@ void displayDurationSetup() {
   display.print("MODE: Next");
   
   display.display();
+  
+  displayMutex.unlock();
 }
 
 // Display calibration screen
 void displayCalibration() {
+  displayMutex.lock();
+  
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   
@@ -550,37 +481,51 @@ void displayCalibration() {
   }
   
   display.display();
+  
+  displayMutex.unlock();
 }
 
 // Helper function to display status messages
 void displayStatus(String line1, String line2) {
-  if (xSemaphoreTake(displayMutex, portMAX_DELAY) == pdTRUE) {
-    display.clearDisplay();
-    display.setTextColor(SSD1306_WHITE);
-    
-    display.setTextSize(1);
-    display.setCursor(0, 0);
-    display.println(line1);
-    
-    display.setCursor(0, 20);
-    display.println(line2);
-    
-    display.display();
-    xSemaphoreGive(displayMutex);
-  }
+  displayMutex.lock();
+  
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println(line1);
+  
+  display.setCursor(0, 20);
+  display.println(line2);
+  
+  display.display();
+  
+  displayMutex.unlock();
 }
 
 // Display live measurement data
 void displayLiveData() {
+  // Don't lock display mutex if we're not going to update
   if (millis() - lastDisplayUpdateTime < DISPLAY_UPDATE_INTERVAL) return;
   
   lastDisplayUpdateTime = millis();
+  
+  displayMutex.lock();
+  sensorDataMutex.lock(); // Lock while reading shared data
   
   unsigned long elapsedTime = millis() - measurementStartTime;
   unsigned long remainingTime = userDurationMillis > elapsedTime ? userDurationMillis - elapsedTime : 0;
   int remainingSeconds = remainingTime / 1000;
   int remainingMinutes = remainingSeconds / 60;
   remainingSeconds %= 60;
+  
+  // Local copies of data that might be modified by other threads
+  int localStepCount = stepCount;
+  int localJumpCount = jumpCount;
+  String movementType = determineMovementType();
+  
+  sensorDataMutex.unlock(); // Unlock as soon as we've read the data
   
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
@@ -593,11 +538,11 @@ void displayLiveData() {
   // Steps and Jumps
   display.setCursor(0, 16);
   display.print("Steps: ");
-  display.print(stepCount);
+  display.print(localStepCount);
   
   display.setCursor(70, 16);
   display.print("Jumps: ");
-  display.print(jumpCount);
+  display.print(localJumpCount);
   
   // Time remaining
   display.setCursor(0, 32);
@@ -610,7 +555,7 @@ void displayLiveData() {
   
   // Current activity type
   display.setCursor(0, 48);
-  display.print(determineMovementType());
+  display.print(movementType);
   
   // Simple progress bar
   display.drawRect(0, 60, 128, 4, SSD1306_WHITE);
@@ -618,6 +563,8 @@ void displayLiveData() {
   display.fillRect(1, 61, progressWidth, 2, SSD1306_WHITE);
   
   display.display();
+  
+  displayMutex.unlock();
 }
 
 // Start measurement manually
@@ -904,9 +851,16 @@ void updateCalibration(float accelX, float accelY, float accelZ) {
 }
 
 void sendResults() {
+  sensorDataMutex.lock();
   currentState = STATE_RESULTS;
   
-  float speed = calculateSpeed(stepCount, userDurationMillis);
+  // Make local copies of shared data
+  int localStepCount = stepCount;
+  int localJumpCount = jumpCount;
+  unsigned long localMeasurementStartTime = measurementStartTime;
+  sensorDataMutex.unlock();
+  
+  float speed = calculateSpeed(localStepCount, userDurationMillis);
   String type = determineMovementType();
   float MET = calculateMET(type);
   float calories = calculateCalories(MET, userWeight, userDurationMinutes);
@@ -919,9 +873,9 @@ void sendResults() {
     else if (speed < 14.0) intensityLevel = "Vigorous";
     else intensityLevel = "High";
   } else if (type == "Jumping") {
-    unsigned long elapsedTimeMinutes = (millis() - measurementStartTime) / 60000.0;
+    unsigned long elapsedTimeMinutes = (millis() - localMeasurementStartTime) / 60000.0;
     if (elapsedTimeMinutes < 0.1) elapsedTimeMinutes = 0.1;
-    float jumpsPerMinute = jumpCount / (float)elapsedTimeMinutes;
+    float jumpsPerMinute = localJumpCount / (float)elapsedTimeMinutes;
     
     if (jumpsPerMinute < 80) intensityLevel = "Light";
     else if (jumpsPerMinute < 100) intensityLevel = "Moderate";
@@ -940,21 +894,22 @@ void sendResults() {
   Serial.println("MET Value: " + String(MET, 1));
 
   if (type == "Jumping") {
-    unsigned long elapsedTimeMinutes = (millis() - measurementStartTime) / 60000.0;
+    unsigned long elapsedTimeMinutes = (millis() - localMeasurementStartTime) / 60000.0;
     if (elapsedTimeMinutes < 0.1) elapsedTimeMinutes = 0.1;
-    float jumpsPerMinute = jumpCount / (float)elapsedTimeMinutes;
+    float jumpsPerMinute = localJumpCount / (float)elapsedTimeMinutes;
     
-    Serial.println("Jumps: " + String(jumpCount));
+    Serial.println("Jumps: " + String(localJumpCount));
     Serial.println("Jumps/min: " + String(jumpsPerMinute, 1));
     Serial.println("Calories: " + String(calories, 2) + " kcal");
   } else {
-    Serial.println("Steps: " + String(stepCount));
+    Serial.println("Steps: " + String(localStepCount));
     Serial.println("Speed: " + String(speed, 2) + " km/h");
     Serial.println("Calories: " + String(calories, 2) + " kcal");
   }
   Serial.println("---------------------");
 
   // Display results screen
+  displayMutex.lock();
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   
@@ -974,19 +929,19 @@ void sendResults() {
   if (type == "Jumping") {
     display.setCursor(0, 28);
     display.print("Jumps: ");
-    display.print(jumpCount);
+    display.print(localJumpCount);
     
     display.setCursor(0, 40);
     display.print("Rate: ");
-    unsigned long elapsedTimeMinutes = (millis() - measurementStartTime) / 60000.0;
+    unsigned long elapsedTimeMinutes = (millis() - localMeasurementStartTime) / 60000.0;
     if (elapsedTimeMinutes < 0.1) elapsedTimeMinutes = 0.1;
-    float jumpsPerMinute = jumpCount / (float)elapsedTimeMinutes;
+    float jumpsPerMinute = localJumpCount / (float)elapsedTimeMinutes;
     display.print(jumpsPerMinute, 1);
     display.print("/min");
   } else {
     display.setCursor(0, 28);
     display.print("Steps: ");
-    display.print(stepCount);
+    display.print(localStepCount);
     
     display.setCursor(0, 40);
     display.print("Speed: ");
@@ -1000,9 +955,79 @@ void sendResults() {
   display.print(calories, 1);
   
   display.display();
+  displayMutex.unlock();
+}
+
+// Button handling thread function
+void buttonsThreadFunc() {
+  while (true) {
+    checkButtons();
+    rtos::ThisThread::sleep_for(BUTTONS_THREAD_DELAY);
+  }
+}
+
+// Sensor processing thread function
+void sensorsThreadFunc() {
+  while (true) {
+    float accelX, accelY, accelZ;
+    
+    if (IMU.accelerationAvailable()) {
+      sensorDataMutex.lock();
+      
+      IMU.readAcceleration(accelX, accelY, accelZ);
+      float magnitude = sqrt(accelX * accelX + accelY * accelY + accelZ * accelZ);
+      unsigned long currentTime = millis();
+
+      // Handle calibration if in calibration state
+      if (currentState == STATE_CALIBRATION) {
+        updateCalibration(accelX, accelY, accelZ);
+      }
+      // Auto-start detection (if in ready state)
+      else if (currentState == STATE_READY && !measurementStarted && magnitude > STEP_THRESHOLD) {
+        startMeasurement();
+      }
+      else if (currentState == STATE_TRACKING && measurementStarted && !measurementComplete) {
+        // Pass all acceleration components to the improved function
+        updateDisplacement(accelX, accelY, accelZ, currentTime);
+        
+        if (currentTime - measurementStartTime >= userDurationMillis) {
+          sendResults();
+        } else if (currentTime - lastStepTime >= STEP_DEBOUNCE_TIME) {
+          // Only detect steps if we're not in a jumping state
+          if (!isInJumpState) {
+            if (magnitude > STEP_THRESHOLD && !wasInStep) {
+              wasInStep = true;
+            } else if (magnitude < (STEP_THRESHOLD * 0.8) && wasInStep) {
+              wasInStep = false;
+              stepCount++;
+              lastStepTime = currentTime;
+            }
+          }
+        }
+      }
+      
+      sensorDataMutex.unlock();
+    }
+    
+    rtos::ThisThread::sleep_for(SENSORS_THREAD_DELAY);
+  }
+}
+
+// Display update thread function
+void displayThreadFunc() {
+  while (true) {
+    displayMutex.lock();
+    
+    if (currentState == STATE_TRACKING && measurementStarted && !measurementComplete) {
+      displayLiveData();
+    }
+    
+    displayMutex.unlock();
+    rtos::ThisThread::sleep_for(DISPLAY_THREAD_DELAY);
+  }
 }
 
 void loop() {
-  // Empty - tasks have taken over
-  vTaskDelay(portMAX_DELAY); // Pause forever
+  // Main loop is now empty as tasks are handled by RTOS threads
+  delay(1000);
 }
