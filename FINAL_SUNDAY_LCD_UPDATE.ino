@@ -204,6 +204,10 @@ void setup() {
     while (1);
   }
   
+  // Show splash screen
+  displaySplashScreen();
+  delay(2000);  // Show splash screen for 2 seconds
+  
   displayStatus("Starting...", "Initializing sensors");
   
   // Initialize IMU
@@ -221,6 +225,35 @@ void setup() {
   thread_display.start(displayThreadFunc);
   
   Serial.println("Anklet Ready with RTOS");
+}
+
+// Display splash screen with logo
+void displaySplashScreen() {
+  display.clearDisplay();
+  
+  // Draw a border around the screen
+  display.drawRect(0, 0, 128, 64, SSD1306_WHITE);
+  
+  // Draw the title
+  display.setTextSize(2);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(15, 5);
+  display.print("ANKLET");
+  
+  // Draw a separator line
+  display.drawFastHLine(10, 25, 108, SSD1306_WHITE);
+  
+  // Draw the subtitle
+  display.setTextSize(1);
+  display.setCursor(10, 30);
+  display.print("Activity Tracker");
+  
+  // Draw simple shoe/anklet logo
+  display.drawRoundRect(45, 40, 38, 18, 5, SSD1306_WHITE);
+  display.drawLine(45, 50, 30, 45, SSD1306_WHITE);
+  display.drawLine(83, 50, 98, 45, SSD1306_WHITE);
+  
+  display.display();
 }
 
 // Proper button debouncing and handling
@@ -397,21 +430,24 @@ void displayWeightSetup() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   
+  // Header with border
+  display.drawRect(0, 0, 128, 12, SSD1306_WHITE);
   display.setTextSize(1);
-  display.setCursor(32, 0);
+  display.setCursor(26, 2);
   display.print("WEIGHT SETUP");
   
-  // Weight value
+  // Weight value - centered
   display.setTextSize(2);
-  display.setCursor(40, 20);
+  display.setCursor(46, 20);
   display.print(userWeight);
   display.setTextSize(1);
   display.print(" kg");
   
-  // Controls
-  display.setCursor(0, 55);
+  // Controls - separated and aligned
+  display.drawFastHLine(0, 52, 128, SSD1306_WHITE);
+  display.setCursor(5, 55);
   display.print("UP/DOWN: Change");
-  display.setCursor(70, 55);
+  display.setCursor(85, 55);
   display.print("MODE: Next");
   
   display.display();
@@ -426,21 +462,24 @@ void displayDurationSetup() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   
+  // Header with border
+  display.drawRect(0, 0, 128, 12, SSD1306_WHITE);
   display.setTextSize(1);
-  display.setCursor(24, 0);
+  display.setCursor(20, 2);
   display.print("DURATION SETUP");
   
-  // Duration value
+  // Duration value - centered
   display.setTextSize(2);
-  display.setCursor(40, 20);
+  display.setCursor(46, 20);
   display.print(userDurationMinutes);
   display.setTextSize(1);
   display.print(" min");
   
-  // Controls
-  display.setCursor(0, 55);
+  // Controls - separated and aligned
+  display.drawFastHLine(0, 52, 128, SSD1306_WHITE);
+  display.setCursor(5, 55);
   display.print("UP/DOWN: Change");
-  display.setCursor(70, 55);
+  display.setCursor(85, 55);
   display.print("MODE: Next");
   
   display.display();
@@ -455,28 +494,31 @@ void displayCalibration() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   
+  // Header with border
+  display.drawRect(0, 0, 128, 12, SSD1306_WHITE);
   display.setTextSize(1);
-  display.setCursor(32, 0);
+  display.setCursor(30, 2);
   display.print("CALIBRATING");
   
   if (!calibrationComplete) {
-    display.setCursor(4, 20);
+    display.setCursor(14, 18);
     display.print("Please hold still");
     
-    // Simple progress bar
-    display.drawRect(14, 40, 100, 6, SSD1306_WHITE);
-    int progressWidth = map(calibrationCount, 0, CALIBRATION_SAMPLES, 0, 98);
-    display.fillRect(15, 41, progressWidth, 4, SSD1306_WHITE);
-    
-    // Progress percentage
-    display.setCursor(50, 30);
+    // Progress percentage with outline
+    display.setCursor(55, 30);
     int progress_num = (calibrationCount * 100) / CALIBRATION_SAMPLES;
     display.print(progress_num);
     display.print("%");
+    
+    // Improved progress bar
+    display.drawRect(14, 40, 100, 8, SSD1306_WHITE);
+    int progressWidth = map(calibrationCount, 0, CALIBRATION_SAMPLES, 0, 98);
+    display.fillRect(15, 41, progressWidth, 6, SSD1306_WHITE);
   } else {
-    display.setCursor(4, 20);
+    display.setCursor(8, 20);
     display.print("Calibration complete");
-    display.setCursor(4, 35);
+    display.drawLine(8, 28, 120, 28, SSD1306_WHITE);
+    display.setCursor(5, 35);
     display.print("Press MODE to continue");
   }
   
@@ -492,12 +534,25 @@ void displayStatus(String line1, String line2) {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   
+  // Header in box
+  display.drawRect(0, 0, 128, 16, SSD1306_WHITE);
   display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println(line1);
   
-  display.setCursor(0, 20);
-  display.println(line2);
+  // Center text in header box
+  int16_t x1, y1;
+  uint16_t w, h;
+  display.getTextBounds(line1, 0, 0, &x1, &y1, &w, &h);
+  display.setCursor((128 - w) / 2, 4);
+  display.print(line1);
+  
+  // Message in middle of screen
+  display.getTextBounds(line2, 0, 0, &x1, &y1, &w, &h);
+  display.setCursor((128 - w) / 2, 30);
+  display.print(line2);
+  
+  // Add decorative elements
+  display.drawRect(10, 25, 108, 20, SSD1306_WHITE);
+  display.drawFastHLine(0, 55, 128, SSD1306_WHITE);
   
   display.display();
   
@@ -530,34 +585,39 @@ void displayLiveData() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   
-  // Header
+  // Header with border
+  display.drawRect(0, 0, 128, 12, SSD1306_WHITE);
   display.setTextSize(1);
-  display.setCursor(32, 0);
+  display.setCursor(38, 2);
   display.print("TRACKING");
   
-  // Steps and Jumps
-  display.setCursor(0, 16);
-  display.print("Steps: ");
-  display.print(localStepCount);
-  
-  display.setCursor(70, 16);
-  display.print("Jumps: ");
-  display.print(localJumpCount);
-  
-  // Time remaining
-  display.setCursor(0, 32);
-  display.print("Time: ");
-  if (remainingMinutes < 10) display.print("0");
-  display.print(remainingMinutes);
-  display.print(":");
-  if (remainingSeconds < 10) display.print("0");
-  display.print(remainingSeconds);
-  
-  // Current activity type
-  display.setCursor(0, 48);
+  // Activity border
+  display.drawRect(0, 42, 128, 12, SSD1306_WHITE);
+  display.setCursor(2, 44);
   display.print(movementType);
   
-  // Simple progress bar
+  // Steps and Jumps in columns
+  display.setCursor(5, 16);
+  display.print("Steps:");
+  display.setCursor(85, 16);
+  display.print("Jumps:");
+  
+  display.setCursor(5, 26);
+  display.print(localStepCount);
+  display.setCursor(85, 26);
+  display.print(localJumpCount);
+  
+  // Time remaining with label
+  display.setCursor(48, 31);
+  display.print("Time:");
+  
+  // Time value centered
+  char timeBuffer[6];
+  sprintf(timeBuffer, "%02d:%02d", remainingMinutes, remainingSeconds);
+  display.setCursor(48, 42);
+  display.print(timeBuffer);
+  
+  // Progress bar at bottom
   display.drawRect(0, 60, 128, 4, SSD1306_WHITE);
   int progressWidth = map(elapsedTime, 0, userDurationMillis, 0, 126);
   display.fillRect(1, 61, progressWidth, 2, SSD1306_WHITE);
@@ -850,6 +910,7 @@ void updateCalibration(float accelX, float accelY, float accelZ) {
   }
 }
 
+// Display and send results
 void sendResults() {
   sensorDataMutex.lock();
   currentState = STATE_RESULTS;
@@ -913,46 +974,52 @@ void sendResults() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   
-  // Header
+  // Header with border
+  display.drawRect(0, 0, 128, 12, SSD1306_WHITE);
   display.setTextSize(1);
-  display.setCursor(32, 0);
+  display.setCursor(40, 2);
   display.print("RESULTS");
   
   // Activity type and intensity
-  display.setCursor(0, 16);
+  display.drawRect(0, 14, 128, 12, SSD1306_WHITE);
+  display.setCursor(2, 16);
   display.print(type);
   display.print(" (");
   display.print(intensityLevel);
   display.print(")");
   
-  // Stats
+  // Stats - in separate sections
   if (type == "Jumping") {
-    display.setCursor(0, 28);
+    display.setCursor(5, 29);
     display.print("Jumps: ");
     display.print(localJumpCount);
     
-    display.setCursor(0, 40);
-    display.print("Rate: ");
     unsigned long elapsedTimeMinutes = (millis() - localMeasurementStartTime) / 60000.0;
     if (elapsedTimeMinutes < 0.1) elapsedTimeMinutes = 0.1;
     float jumpsPerMinute = localJumpCount / (float)elapsedTimeMinutes;
+    
+    display.setCursor(70, 29);
     display.print(jumpsPerMinute, 1);
     display.print("/min");
   } else {
-    display.setCursor(0, 28);
+    display.setCursor(5, 29);
     display.print("Steps: ");
     display.print(localStepCount);
     
-    display.setCursor(0, 40);
-    display.print("Speed: ");
+    display.setCursor(70, 29);
     display.print(speed, 1);
     display.print(" km/h");
   }
   
-  // Calories
-  display.setCursor(0, 52);
+  // Calories in a box at bottom
+  display.drawRect(14, 40, 100, 15, SSD1306_WHITE);
+  display.setCursor(20, 45);
   display.print("Calories: ");
   display.print(calories, 1);
+  
+  // Instructions
+  display.setCursor(8, 56);
+  display.print("Press UP or MODE to continue");
   
   display.display();
   displayMutex.unlock();
