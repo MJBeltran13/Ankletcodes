@@ -58,7 +58,7 @@ DeviceState currentState = STATE_WEIGHT_SETUP;
 
 // Movement detection thresholds
 const float STEP_THRESHOLD = 2.0;        // Minimum acceleration to detect a step (in m/s²)
-const float STRIDE_LENGTH = 0.7;         // Average stride length in meters
+const float STRIDE_LENGTH = 0.6;         // Average stride length in meters
 const int STEP_DEBOUNCE_TIME = 400;      // Increased debounce time for better step detection
 const float STEPPING_THRESHOLD = 1.0;    // Lowered threshold for walking detection
 const float RUNNING_THRESHOLD = 3.0;     // Increased threshold for running detection
