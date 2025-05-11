@@ -447,8 +447,8 @@ void displayWeightSetup() {
   display.drawFastHLine(0, 52, 128, SSD1306_WHITE);
   display.setCursor(5, 55);
   display.print("UP/DOWN: Change");
-  display.setCursor(85, 55);
-  display.print("MODE: Next");
+  display.setCursor(95, 55);
+  display.print("MODE:Next");
   
   display.display();
   
@@ -518,8 +518,10 @@ void displayCalibration() {
     display.setCursor(8, 20);
     display.print("Calibration complete");
     display.drawLine(8, 28, 120, 28, SSD1306_WHITE);
-    display.setCursor(5, 35);
-    display.print("Press MODE to continue");
+    display.setCursor(25, 35);
+    display.print("Press MODE");
+    display.setCursor(25, 45);
+    display.print("to continue");
   }
   
   display.display();
@@ -596,25 +598,25 @@ void displayLiveData() {
   display.setCursor(2, 44);
   display.print(movementType);
   
-  // Steps and Jumps in columns
+  // Steps and Jumps in left column
   display.setCursor(5, 16);
   display.print("Steps:");
-  display.setCursor(85, 16);
-  display.print("Jumps:");
-  
   display.setCursor(5, 26);
   display.print(localStepCount);
-  display.setCursor(85, 26);
+  
+  display.setCursor(5, 36);
+  display.print("Jumps:");
+  display.setCursor(45, 36);
   display.print(localJumpCount);
   
-  // Time remaining with label
-  display.setCursor(48, 31);
+  // Time remaining with label on right
+  display.setCursor(75, 16);
   display.print("Time:");
   
-  // Time value centered
+  // Time value 
   char timeBuffer[6];
   sprintf(timeBuffer, "%02d:%02d", remainingMinutes, remainingSeconds);
-  display.setCursor(48, 42);
+  display.setCursor(75, 26);
   display.print(timeBuffer);
   
   // Progress bar at bottom
@@ -1019,7 +1021,7 @@ void sendResults() {
   
   // Instructions
   display.setCursor(8, 56);
-  display.print("Press UP or MODE to continue");
+  display.print("Press MODE to continue");
   
   display.display();
   displayMutex.unlock();
