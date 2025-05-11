@@ -444,10 +444,10 @@ void displayWeightSetup() {
   display.print(" kg");
   
   // Controls - separated and aligned
-  display.drawFastHLine(0, 52, 128, SSD1306_WHITE);
-  display.setCursor(5, 55);
+  display.drawFastHLine(0, 43, 128, SSD1306_WHITE);
+  display.setCursor(20, 45);
   display.print("UP/DOWN: Change");
-  display.setCursor(95, 55);
+  display.setCursor(35, 55);
   display.print("MODE:Next");
   
   display.display();
@@ -476,11 +476,11 @@ void displayDurationSetup() {
   display.print(" min");
   
   // Controls - separated and aligned
-  display.drawFastHLine(0, 52, 128, SSD1306_WHITE);
-  display.setCursor(5, 55);
+  display.drawFastHLine(0, 43, 128, SSD1306_WHITE);
+  display.setCursor(20, 45);
   display.print("UP/DOWN: Change");
-  display.setCursor(85, 55);
-  display.print("MODE: Next");
+  display.setCursor(35, 55);
+  display.print("MODE:Next");
   
   display.display();
   
@@ -515,12 +515,12 @@ void displayCalibration() {
     int progressWidth = map(calibrationCount, 0, CALIBRATION_SAMPLES, 0, 98);
     display.fillRect(15, 41, progressWidth, 6, SSD1306_WHITE);
   } else {
-    display.setCursor(8, 20);
+    display.setCursor(5, 20);
     display.print("Calibration complete");
     display.drawLine(8, 28, 120, 28, SSD1306_WHITE);
-    display.setCursor(25, 35);
+    display.setCursor(35, 35);
     display.print("Press MODE");
-    display.setCursor(25, 45);
+    display.setCursor(32, 45);
     display.print("to continue");
   }
   
@@ -601,12 +601,10 @@ void displayLiveData() {
   // Steps and Jumps in left column
   display.setCursor(5, 16);
   display.print("Steps:");
-  display.setCursor(5, 26);
   display.print(localStepCount);
   
-  display.setCursor(5, 36);
+  display.setCursor(5, 31);
   display.print("Jumps:");
-  display.setCursor(45, 36);
   display.print(localJumpCount);
   
   // Time remaining with label on right
